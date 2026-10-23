@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+
+# Build output and bundler caches
+dist/
+.vite/
+.cache/
+*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+*.lcov
+
+# Logs and runtime output
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+!.env.template
+*.local
+*.pem
+*.key
+
+# Docker and local container overrides
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Operating system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
+
+# Editors and IDEs
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.swp
+*.swo
+*~
+
+# Local AI assistant configuration and generated skill files
+.agents/
+.claude/
+.gemini/
+.cursor/
+.windsurf/

@@ -1,0 +1,138 @@
+import { db } from '../db/db';
+import type { StudySession, WeeklyPlan } from '../db/types';
+import {
+  blockToSession,
+  distributeWeek,
+  isManualSession,
+} from '../domain/schedule';
+import { addDays, isValidDateKey, todayKey, type DateKey } from '../lib/dates';
+import { getSettings, updateSettings } from './settings';
+import { ValidationError } from './sessions';
+import {
+  generateAiSchedulePlan,
+  filterAndAdjustAiSessions,
+  type AiScheduleOptions,
+} from './aiSchedule';
+
+/** Sessão planejada ainda não tocada pelo usuário e gerada pela IA (pode ser substituída por nova geração). */
+function isReplaceable(s: StudySession): boolean {
+  if (isManualSession(s)) return false;
+  return s.status === 'planejada' && s.actualSeconds === 0 && s.origin === 'planejada' && s.recoveredFromId === null;
+}
+
+/**
+ * Gera o cronograma de 24 semanas EXCLUSIVAMENTE por Inteligência Artificial (motor especialista BNB ou Gemini):
+ * - Aplica o peso real da prova do BNB com forte enfoque em Conhecimentos Específicos de TI.
+ * - Limita os dias de estudo rigorosamente a 2 horas (120 minutos).
+ * - Aos sábados: exclusivamente de resolução de questões ou simulados.
+ * - Domingos: dia livre / descanso semanal.
+ * - Respeita e NÃO sobrepõe sessões pré-criadas/manuais ou executadas pelo usuário.
+ */
+export async function generateSchedule(
+  startDateInput: DateKey,
+  _today: DateKey = todayKey(),
+  options?: AiScheduleOptions,
+): Promise<{ weekCount: number; sessionCount: number; providerUsed: string }> {
+  if (!isValidDateKey(startDateInput)) throw new ValidationError('Informe uma data de início válida.');
+  const startDate = startDateInput;
+  const settings = await getSettings();
+  const disciplines = await db.disciplines.toArray();
+  const topics = await db.topics.toArray();
+
+  const aiResult = await generateAiSchedulePlan({
+    startDate,
+    disciplines,
+    topics,
+    settings,
+    options,
+  });
+
+  await db.transaction('rw', db.weeklyPlans, db.sessions, db.settings, async () => {
+    const replaceable = await db.sessions.filter(isReplaceable).primaryKeys();
+    await db.sessions.bulkDelete(replaceable);
+    await db.weeklyPlans.clear();
+
+    await db.weeklyPlans.bulkAdd(aiResult.weeklyPlans);
+
+    const preservedSessions = await db.sessions.toArray();
+    const finalSessions = filterAndAdjustAiSessions(aiResult.sessions, preservedSessions);
+
+    await db.sessions.bulkAdd(finalSessions);
+    await db.settings.update('settings', { scheduleStartDate: startDate });
+  });
+
+  return {
+    weekCount: aiResult.weeklyPlans.length,
+    sessionCount: aiResult.sessions.length,
+    providerUsed: aiResult.providerUsed,
+  };
+}
+
+/**
+ * Reaplica a distribuição atual a uma semana: substitui sessões planejadas não
+ * executadas e geradas automaticamente a partir de hoje. Sessões manuais e executadas não mudam.
+ */
+export async function applyDistributionToWeek(weekStart: DateKey, today: DateKey = todayKey()): Promise<number> {
+  const settings = await getSettings();
+  const disciplines = await db.disciplines.toArray();
+  const end = addDays(weekStart, 6);
+  return db.transaction('rw', db.sessions, async () => {
+    const replaceable = await db.sessions
+      .where('date')
+      .between(weekStart, end, true, true)
+      .filter((s) => s.date >= today && isReplaceable(s))
+      .primaryKeys();
+    await db.sessions.bulkDelete(replaceable);
+
+    const remainingSessions = await db.sessions
+      .where('date')
+      .between(weekStart, end, true, true)
+      .toArray();
+
+    const sessions = distributeWeek(weekStart, settings.distribution, disciplines, true, remainingSessions)
+      .filter((b) => b.date >= today)
+      .map((b) => blockToSession(b));
+    await db.sessions.bulkAdd(sessions);
+    return sessions.length;
+  });
+}
+
+export interface WeeklyPlanInput {
+  objectives: string;
+  plannedContent: string;
+  plannedMinutes: number;
+  status: WeeklyPlan['status'];
+  notes: string;
+}
+
+export async function updateWeeklyPlan(id: string, input: WeeklyPlanInput): Promise<void> {
+  if (!Number.isInteger(input.plannedMinutes) || input.plannedMinutes < 0 || input.plannedMinutes > 10080) {
+    throw new ValidationError('A meta da semana deve ser um inteiro entre 0 e 10080 minutos.');
+  }
+  const updated = await db.weeklyPlans.update(id, {
+    objectives: input.objectives.trim(),
+    plannedContent: input.plannedContent.trim(),
+    plannedMinutes: input.plannedMinutes,
+    status: input.status,
+    notes: input.notes.trim(),
+  });
+  if (!updated) throw new ValidationError('Semana não encontrada.');
+}
+
+export async function saveDistribution(distribution: Record<string, number>): Promise<void> {
+  await updateSettings({ distribution });
+}
+
+/**
+ * Limpa o cronograma: remove todos os planos semanais e as sessões planejadas
+ * que ainda não foram executadas (preserva sessões concluídas e histórico).
+ * Reseta scheduleStartDate nas configurações.
+ */
+export async function clearSchedule(): Promise<void> {
+  await db.transaction('rw', db.weeklyPlans, db.sessions, db.settings, async () => {
+    const replaceable = await db.sessions.filter(isReplaceable).primaryKeys();
+    await db.sessions.bulkDelete(replaceable);
+    await db.weeklyPlans.clear();
+    await db.settings.update('settings', { scheduleStartDate: null });
+  });
+}

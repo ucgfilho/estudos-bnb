@@ -1,0 +1,11 @@
+services:
+  dashboard-bnb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dashboard_estudos_bnb
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:80"
+    environment:
+      - NODE_ENV=production

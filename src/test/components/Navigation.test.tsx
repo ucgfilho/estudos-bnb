@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { App } from '../../App';
 import { db, ensureSeed } from '../../db/db';
 import { generateSchedule } from '../../services/schedule';
+import { createSession } from '../../services/sessions';
+import { startPlannedTimer } from '../../services/timer';
 import { addDays, startOfWeek, todayKey } from '../../lib/dates';
 
 describe('App Navigation and Screen Integration', () => {
@@ -119,6 +121,26 @@ describe('App Navigation and Screen Integration', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Semana 2 —/i)).toBeInTheDocument();
+    });
+  });
+
+  it('updates document.title with elapsed time and discipline name during an active timer session', async () => {
+    const session = await createSession({
+      date: todayKey(),
+      disciplineId: 'portugues',
+      topicId: null,
+      plannedStart: null,
+      plannedMinutes: 60,
+      objective: 'Ortografia',
+      notes: '',
+    });
+
+    await startPlannedTimer(session.id);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(document.title).toMatch(/▶ 00:00:00 - Língua Portuguesa/);
     });
   });
 });

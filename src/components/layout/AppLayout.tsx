@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { CelebrationLayer } from '../motivation/CelebrationLayer';
-import { useActiveTimer } from '../../hooks/useData';
+import { useActiveTimer, useDisciplines } from '../../hooks/useData';
 import { elapsedSeconds } from '../../domain/timer';
 import { formatClock } from '../../lib/format';
 
@@ -18,6 +18,10 @@ function useWorkerTick(enabled: boolean): number {
   useEffect(() => {
     if (!enabled) return;
     setTick(Date.now());
+    if (typeof Worker === 'undefined') {
+      const id = window.setInterval(() => setTick(Date.now()), 1000);
+      return () => window.clearInterval(id);
+    }
     const url = URL.createObjectURL(
       new Blob(['setInterval(() => postMessage(0), 1000)'], { type: 'text/javascript' }),
     );
@@ -34,17 +38,27 @@ function useWorkerTick(enabled: boolean): number {
 export function AppLayout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const activeTimer = useActiveTimer();
+  const disciplines = useDisciplines();
   const now = useWorkerTick(Boolean(activeTimer && activeTimer.status === 'running'));
 
-  // Mostra o tempo do cronômetro no rótulo da aba do navegador.
+  const discMap = useMemo(() => new Map(disciplines.map((d) => [d.id, d])), [disciplines]);
+
+  // Mostra o tempo do cronômetro no rótulo da aba do navegador: tempo decorrido - "nome da disciplina"
   useEffect(() => {
     if (!activeTimer) {
       document.title = BASE_TITLE;
       return;
     }
     const clock = formatClock(elapsedSeconds(activeTimer, now));
-    document.title = `${activeTimer.status === 'running' ? '▶' : '⏸'} ${clock} — Estudos BNB`;
-  }, [activeTimer, now]);
+    const disc = discMap.get(activeTimer.disciplineId);
+    const disciplineName =
+      disc?.name ??
+      (activeTimer.disciplineId === 'simulado'
+        ? 'Simulado Geral BNB'
+        : activeTimer.disciplineId || 'Estudos BNB');
+    const statusIcon = activeTimer.status === 'running' ? '▶' : '⏸';
+    document.title = `${statusIcon} ${clock} - ${disciplineName}`;
+  }, [activeTimer, now, discMap]);
 
   useEffect(() => () => {
     document.title = BASE_TITLE;

@@ -83,16 +83,73 @@ export function plannedSessions(sessions: readonly StudySession[]): StudySession
   return sessions.filter((s) => s.origin === 'planejada' && !superseded.has(s.id));
 }
 
+/** Sessões ativas do cronograma em um intervalo (exclui sessões perdidas e substituídas por recuperação). */
+export function activeScheduleSessionsInRange(
+  sessions: readonly StudySession[],
+  start: DateKey,
+  end: DateKey,
+): StudySession[] {
+  const superseded = supersededSessionIds(sessions);
+  return sessions.filter(
+    (s) => isWithin(s.date, start, end) && s.status !== 'perdida' && !superseded.has(s.id),
+  );
+}
+
 export function plannedMinutesInRange(sessions: readonly StudySession[], start: DateKey, end: DateKey): number {
-  return plannedSessions(sessions)
-    .filter((s) => isWithin(s.date, start, end))
-    .reduce((sum, s) => sum + s.plannedMinutes, 0);
+  return activeScheduleSessionsInRange(sessions, start, end).reduce(
+    (sum, s) => sum + s.plannedMinutes,
+    0,
+  );
 }
 
 /** Percentual de cumprimento (realizado / planejado). `null` se nada planejado. */
 export function completionRate(doneMinutes: number, plannedMinutes: number): number | null {
   if (plannedMinutes <= 0) return null;
   return (doneMinutes / plannedMinutes) * 100;
+}
+
+export interface WeekScheduleMetrics {
+  plannedMinutes: number;
+  doneMinutes: number;
+  completionRate: number | null;
+  totalSessions: number;
+  completedSessions: number;
+}
+
+/**
+ * Métricas sincronizadas de um intervalo/semana do cronograma com base nas sessões presentes na janela:
+ * - Considera todas as sessões ativas (não perdidas e não substituídas) agendadas em [start, end].
+ * - Quando uma sessão do cronograma está marcada como concluída, contabiliza a carga do bloco (plannedMinutes),
+ *   garantindo que exclusões, adições, edições manuais de duração e conclusões fiquem 100% sincronizadas.
+ * - Sessões ainda não concluídas com tempo parcial registrado somam o tempo parcial (actualSeconds / 60).
+ */
+export function weekScheduleMetrics(
+  sessions: readonly StudySession[],
+  start: DateKey,
+  end: DateKey,
+): WeekScheduleMetrics {
+  const weekActive = activeScheduleSessionsInRange(sessions, start, end);
+  let plannedMinutes = 0;
+  let doneMinutes = 0;
+  let completedSessions = 0;
+
+  for (const s of weekActive) {
+    plannedMinutes += s.plannedMinutes;
+    if (s.status === 'concluida') {
+      doneMinutes += s.plannedMinutes;
+      completedSessions += 1;
+    } else if (s.actualSeconds > 0) {
+      doneMinutes += s.actualSeconds / 60;
+    }
+  }
+
+  return {
+    plannedMinutes,
+    doneMinutes,
+    completionRate: completionRate(doneMinutes, plannedMinutes),
+    totalSessions: weekActive.length,
+    completedSessions,
+  };
 }
 
 /**

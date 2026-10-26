@@ -6,6 +6,7 @@ import {
   topicProgress,
   worstTopics,
   accuracyByDiscipline,
+  weekScheduleMetrics,
 } from '../../domain/metrics';
 import type { QuestionLog, StudySession, Topic, Discipline } from '../../db/types';
 
@@ -237,5 +238,76 @@ describe('domain/metrics - topics and worst performers', () => {
     const bd = list.find((d) => d.disciplineId === 'banco-dados');
     expect(pt?.accuracy).toBe(80);
     expect(bd?.accuracy).toBe(100);
+  });
+});
+
+describe('domain/metrics - weekScheduleMetrics synchronization', () => {
+  it('synchronizes plannedMinutes, doneMinutes, and completionRate across manual and planned sessions in the week', () => {
+    const sessions: StudySession[] = [
+      {
+        id: 's1',
+        date: '2026-10-18',
+        disciplineId: 'portugues',
+        topicId: null,
+        plannedStart: null,
+        plannedMinutes: 300,
+        actualSeconds: 15000,
+        status: 'concluida',
+        objective: 'Estudo domingo',
+        notes: '',
+        origin: 'planejada',
+        startedAt: '2026-10-18T10:00:00Z',
+        endedAt: '2026-10-18T14:10:00Z',
+        recoveredFromId: null,
+        history: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 's2',
+        date: '2026-10-21',
+        disciplineId: 'raciocinio',
+        topicId: null,
+        plannedStart: null,
+        plannedMinutes: 15,
+        actualSeconds: 900,
+        status: 'concluida',
+        objective: 'Sessão avulsa quarta',
+        notes: '',
+        origin: 'avulsa',
+        startedAt: '2026-10-21T19:00:00Z',
+        endedAt: '2026-10-21T19:15:00Z',
+        recoveredFromId: null,
+        history: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 's3',
+        date: '2026-10-24',
+        disciplineId: 'simulado',
+        topicId: null,
+        plannedStart: null,
+        plannedMinutes: 120,
+        actualSeconds: 7200,
+        status: 'concluida',
+        objective: 'Simulado sábado concluído no domingo',
+        notes: '',
+        origin: 'planejada',
+        startedAt: '2026-10-25T09:00:00Z',
+        endedAt: '2026-10-25T11:00:00Z',
+        recoveredFromId: null,
+        history: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+
+    const metrics = weekScheduleMetrics(sessions, '2026-10-18', '2026-10-24');
+    expect(metrics.totalSessions).toBe(3);
+    expect(metrics.completedSessions).toBe(3);
+    expect(metrics.plannedMinutes).toBe(435);
+    expect(metrics.doneMinutes).toBe(435);
+    expect(metrics.completionRate).toBe(100);
   });
 });

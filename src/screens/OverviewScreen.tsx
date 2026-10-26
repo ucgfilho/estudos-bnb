@@ -38,7 +38,7 @@ import {
 } from '../hooks/useData';
 import {
   studiedMinutesInRange,
-  plannedMinutesInRange,
+  weekScheduleMetrics,
   sumQuestions,
   studyStreak,
   topicProgress,
@@ -84,14 +84,12 @@ export function OverviewScreen() {
     () => studiedMinutesInRange(sessions, today, today),
     [sessions, today]
   );
-  const weekDoneMinutes = useMemo(
-    () => studiedMinutesInRange(sessions, currentWeekStart, currentWeekEnd),
+  const currentWeekMetrics = useMemo(
+    () => weekScheduleMetrics(sessions, currentWeekStart, currentWeekEnd),
     [sessions, currentWeekStart, currentWeekEnd]
   );
-  const weekPlannedMinutes = useMemo(
-    () => plannedMinutesInRange(sessions, currentWeekStart, currentWeekEnd),
-    [sessions, currentWeekStart, currentWeekEnd]
-  );
+  const weekDoneMinutes = currentWeekMetrics.doneMinutes;
+  const weekPlannedMinutes = currentWeekMetrics.plannedMinutes;
 
   const questionTotals = useMemo(() => sumQuestions(questionLogs), [questionLogs]);
   const streak = useMemo(() => studyStreak(sessions, today), [sessions, today]);

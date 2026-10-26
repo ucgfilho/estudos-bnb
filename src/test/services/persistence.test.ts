@@ -2,12 +2,15 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { db, ensureSeed, resetDatabase } from '../../db/db';
 import {
   createSession,
+  updateSession,
+  deleteSession,
   rescheduleSession,
   recoverSession,
   setSessionStatus,
   moveSession,
   compareSessionsInDay,
 } from '../../services/sessions';
+import { weekScheduleMetrics } from '../../domain/metrics';
 import {
   startPlannedTimer,
   pauseTimer,
@@ -580,5 +583,57 @@ describe('services/persistence & workflows', () => {
     const doneCount = updatedWeekOne.filter((s) => s.status === 'concluida').length;
     expect(doneCount).toBe(1);
     expect(updatedWeekOne.length).toBe(5); // 1 de 5 sessões (e não 1 de 11!)
+  });
+
+  it('synchronizes WeeklyPlan plannedMinutes, status, and weekScheduleMetrics when deleting, editing, or completing sessions', async () => {
+    await ensureSeed(db);
+    await generateSchedule('2026-10-18');
+
+    const initialSessions = (await db.sessions.toArray()).filter(
+      (s) => s.date >= '2026-10-18' && s.date <= '2026-10-24'
+    );
+    expect(initialSessions.length).toBeGreaterThan(2);
+
+    // Delete 2 generated sessions that could not be performed
+    await deleteSession(initialSessions[0].id);
+    await deleteSession(initialSessions[1].id);
+
+    // Edit one session's plannedMinutes
+    const targetToEdit = initialSessions[2];
+    await updateSession(targetToEdit.id, {
+      date: targetToEdit.date,
+      disciplineId: targetToEdit.disciplineId,
+      topicId: targetToEdit.topicId,
+      plannedStart: targetToEdit.plannedStart,
+      plannedMinutes: 90,
+      objective: targetToEdit.objective,
+      notes: targetToEdit.notes,
+    });
+
+    const afterAdjustSessions = (await db.sessions.toArray()).filter(
+      (s) => s.date >= '2026-10-18' && s.date <= '2026-10-24'
+    );
+    const expectedTotalMinutes = afterAdjustSessions.reduce((acc, s) => acc + s.plannedMinutes, 0);
+
+    const planAfterAdjust = (await db.weeklyPlans.orderBy('weekIndex').toArray())[0];
+    expect(planAfterAdjust.plannedMinutes).toBe(expectedTotalMinutes);
+    expect(planAfterAdjust.status).toBe('pendente');
+
+    // Complete all remaining sessions in Week 1
+    for (const s of afterAdjustSessions) {
+      await setSessionStatus(s.id, 'concluida');
+    }
+
+    const finalSessions = await db.sessions.toArray();
+    const metrics = weekScheduleMetrics(finalSessions, '2026-10-18', '2026-10-24');
+    expect(metrics.totalSessions).toBe(afterAdjustSessions.length);
+    expect(metrics.completedSessions).toBe(afterAdjustSessions.length);
+    expect(metrics.plannedMinutes).toBe(expectedTotalMinutes);
+    expect(metrics.doneMinutes).toBe(expectedTotalMinutes);
+    expect(metrics.completionRate).toBe(100);
+
+    const planFinal = (await db.weeklyPlans.orderBy('weekIndex').toArray())[0];
+    expect(planFinal.plannedMinutes).toBe(expectedTotalMinutes);
+    expect(planFinal.status).toBe('concluida');
   });
 });

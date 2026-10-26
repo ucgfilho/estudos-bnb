@@ -7,12 +7,14 @@ import {
 } from '../domain/schedule';
 import { addDays, isValidDateKey, todayKey, type DateKey } from '../lib/dates';
 import { getSettings, updateSettings } from './settings';
-import { ValidationError } from './sessions';
+import { ValidationError, syncWeeklyPlansWithSessions } from './sessions';
 import {
   generateAiSchedulePlan,
   filterAndAdjustAiSessions,
   type AiScheduleOptions,
 } from './aiSchedule';
+
+export { syncWeeklyPlansWithSessions };
 
 /** Sessão planejada ainda não tocada pelo usuário e gerada pela IA (pode ser substituída por nova geração). */
 function isReplaceable(s: StudySession): boolean {
@@ -58,6 +60,7 @@ export async function generateSchedule(
     const finalSessions = filterAndAdjustAiSessions(aiResult.sessions, preservedSessions);
 
     await db.sessions.bulkAdd(finalSessions);
+    await syncWeeklyPlansWithSessions();
     await db.settings.update('settings', { scheduleStartDate: startDate });
   });
 
@@ -76,7 +79,7 @@ export async function applyDistributionToWeek(weekStart: DateKey, today: DateKey
   const settings = await getSettings();
   const disciplines = await db.disciplines.toArray();
   const end = addDays(weekStart, 6);
-  return db.transaction('rw', db.sessions, async () => {
+  return db.transaction('rw', db.sessions, db.weeklyPlans, async () => {
     const replaceable = await db.sessions
       .where('date')
       .between(weekStart, end, true, true)
@@ -93,6 +96,7 @@ export async function applyDistributionToWeek(weekStart: DateKey, today: DateKey
       .filter((b) => b.date >= today)
       .map((b) => blockToSession(b));
     await db.sessions.bulkAdd(sessions);
+    await syncWeeklyPlansWithSessions();
     return sessions.length;
   });
 }

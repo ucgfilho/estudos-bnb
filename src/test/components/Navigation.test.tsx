@@ -3,6 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from '../../App';
 import { db, ensureSeed } from '../../db/db';
+import { generateSchedule } from '../../services/schedule';
+import { addDays, startOfWeek, todayKey } from '../../lib/dates';
 
 describe('App Navigation and Screen Integration', () => {
   beforeEach(async () => {
@@ -104,6 +106,19 @@ describe('App Navigation and Screen Integration', () => {
     await user.click(screen.getByRole('link', { name: /configurações/i }));
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /configurações/i })).toBeInTheDocument();
+    });
+  });
+
+  it('automatically selects the current calendar week (Semana 2) when opening Cronograma', async () => {
+    const today = todayKey();
+    const previousWeekStart = addDays(startOfWeek(today), -7);
+    await generateSchedule(previousWeekStart, today);
+
+    window.location.hash = '#/cronograma';
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Semana 2 —/i)).toBeInTheDocument();
     });
   });
 });

@@ -45,6 +45,7 @@ import {
   updateWeeklyPlan,
   saveDistribution,
   clearSchedule,
+  syncWeeklyPlansWithSessions,
   type WeeklyPlanInput,
 } from '../services/schedule';
 import {
@@ -56,9 +57,8 @@ import {
 } from '../services/sessions';
 import { startPlannedTimer } from '../services/timer';
 import {
-  studiedMinutesInRange,
-  plannedMinutesInRange,
-  completionRate,
+  weekScheduleMetrics,
+  supersededSessionIds,
 } from '../domain/metrics';
 import { detectOverload, sumDistribution } from '../domain/schedule';
 import {
@@ -86,7 +86,24 @@ export function ScheduleScreen() {
   const sessions = useSessions();
   const settings = useSettings();
 
-  const [selectedWeekIndex, setSelectedWeekIndex] = useState<number>(1);
+  const currentWeekPlan = useMemo(() => {
+    return weeklyPlans.find((wp) => today >= wp.weekStart && today <= addDays(wp.weekStart, 6)) ?? null;
+  }, [weeklyPlans, today]);
+
+  const [selectedWeekIndex, setSelectedWeekIndex] = useState<number>(
+    () => currentWeekPlan?.weekIndex ?? 1
+  );
+  const autoSelectedWeekKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!currentWeekPlan) return;
+    const key = `${today}:${currentWeekPlan.id}`;
+    if (autoSelectedWeekKeyRef.current !== key) {
+      autoSelectedWeekKeyRef.current = key;
+      setSelectedWeekIndex(currentWeekPlan.weekIndex);
+    }
+  }, [currentWeekPlan, today]);
+
   const [generateModalOpen, setGenerateModalOpen] = useState(false);
   const [generateStartDate, setGenerateStartDate] = useState(today);
 
@@ -183,12 +200,10 @@ export function ScheduleScreen() {
     return weeklyPlans.find((p) => p.weekIndex === selectedWeekIndex) ?? weeklyPlans[0] ?? null;
   }, [weeklyPlans, selectedWeekIndex]);
 
-  const currentWeekPlan = useMemo(() => {
-    return weeklyPlans.find((wp) => today >= wp.weekStart && today <= addDays(wp.weekStart, 6));
-  }, [weeklyPlans, today]);
-
   const weekStart = currentPlan?.weekStart ?? startOfWeek(today);
   const weekEnd = useMemo(() => addDays(weekStart, 6), [weekStart]);
+
+  const superseded = useMemo(() => supersededSessionIds(activeSessions), [activeSessions]);
 
   // Week sessions
   const weekSessions = useMemo(() => {
@@ -205,23 +220,44 @@ export function ScheduleScreen() {
     return detectOverload(activeSessions, weekStart, dailyGoal, weeklyGoal);
   }, [activeSessions, weekStart, dailyGoal, weeklyGoal]);
 
-  const doneMinutes = useMemo(
-    () => studiedMinutesInRange(activeSessions, weekStart, weekEnd),
+  const weekMetrics = useMemo(
+    () => weekScheduleMetrics(activeSessions, weekStart, weekEnd),
     [activeSessions, weekStart, weekEnd]
   );
-  const plannedMinutes = useMemo(
-    () => plannedMinutesInRange(activeSessions, weekStart, weekEnd),
-    [activeSessions, weekStart, weekEnd]
-  );
-  const compRate = useMemo(
-    () => completionRate(doneMinutes, plannedMinutes),
-    [doneMinutes, plannedMinutes]
-  );
+  const doneMinutes = weekMetrics.doneMinutes;
+  const plannedMinutes = weekMetrics.plannedMinutes;
+  const compRate = weekMetrics.completionRate;
+  const effectivePlannedMinutes =
+    weekMetrics.totalSessions > 0 ? weekMetrics.plannedMinutes : (currentPlan?.plannedMinutes ?? 0);
+  const effectivePlanStatus: WeeklyPlanStatus = useMemo(() => {
+    if (!currentPlan) return 'pendente';
+    if (weekMetrics.totalSessions > 0 && weekMetrics.completedSessions === weekMetrics.totalSessions) {
+      return 'concluida';
+    }
+    if (weekMetrics.completedSessions > 0 || weekMetrics.doneMinutes > 0) {
+      return 'em-andamento';
+    }
+    return currentPlan.status;
+  }, [currentPlan, weekMetrics]);
+
+  useEffect(() => {
+    if (!currentPlan) return;
+    const expectedMinutes =
+      weekMetrics.totalSessions > 0 ? weekMetrics.plannedMinutes : currentPlan.plannedMinutes;
+    if (
+      currentPlan.plannedMinutes !== expectedMinutes ||
+      currentPlan.status !== effectivePlanStatus
+    ) {
+      void syncWeeklyPlansWithSessions();
+    }
+  }, [currentPlan, weekMetrics.totalSessions, weekMetrics.plannedMinutes, effectivePlanStatus]);
 
   // Overdue sessions in this week (planned, date < today, not completed)
   const overdueSessions = useMemo(() => {
-    return weekSessions.filter((s) => s.status === 'planejada' && s.date < today);
-  }, [weekSessions, today]);
+    return weekSessions.filter(
+      (s) => s.status === 'planejada' && !superseded.has(s.id) && s.date < today
+    );
+  }, [weekSessions, superseded, today]);
 
   // Reapply distribution to current week
   const handleReapplyWeek = async () => {
@@ -775,7 +811,7 @@ export function ScheduleScreen() {
         {currentPlan ? (
           <Card
             title={`Semana ${currentPlan.weekIndex} — (${formatDate(weekStart)} a ${formatDate(weekEnd)})`}
-            description={`Meta planejada: ${formatMinutes(currentPlan.plannedMinutes)}`}
+            description={`Meta planejada: ${formatMinutes(effectivePlannedMinutes)}`}
             actions={
               <div className="flex items-center gap-2">
                 <Button
@@ -788,20 +824,26 @@ export function ScheduleScreen() {
                 </Button>
                 <Badge
                   tone={
-                    currentPlan.status === 'concluida'
+                    effectivePlanStatus === 'concluida'
                       ? 'success'
-                      : currentPlan.status === 'em-andamento'
+                      : effectivePlanStatus === 'em-andamento'
                       ? 'warning'
                       : 'neutral'
                   }
                 >
-                  {WEEKLY_PLAN_STATUS_LABELS[currentPlan.status]}
+                  {WEEKLY_PLAN_STATUS_LABELS[effectivePlanStatus]}
                 </Badge>
                 <Button
                   variant="secondary"
                   size="sm"
                   icon={<Edit className="size-3.5" />}
-                  onClick={() => openEditPlan(currentPlan)}
+                  onClick={() =>
+                    openEditPlan({
+                      ...currentPlan,
+                      plannedMinutes: effectivePlannedMinutes,
+                      status: effectivePlanStatus,
+                    })
+                  }
                 >
                   Editar Objetivos
                 </Button>
@@ -826,7 +868,7 @@ export function ScheduleScreen() {
               <StatCard
                 label="Percentual de Cumprimento"
                 value={formatPercent(compRate)}
-                hint={`${weekSessions.filter((s) => s.status === 'concluida').length} de ${weekSessions.length} sessões concluídas`}
+                hint={`${weekMetrics.completedSessions} de ${weekMetrics.totalSessions} sessões concluídas`}
                 icon={<CheckCircle className="size-4" />}
               />
 
@@ -918,7 +960,7 @@ export function ScheduleScreen() {
               <StatCard
                 label="Percentual de Cumprimento"
                 value={formatPercent(compRate)}
-                hint={`${weekSessions.filter((s) => s.status === 'concluida').length} de ${weekSessions.length} sessões concluídas`}
+                hint={`${weekMetrics.completedSessions} de ${weekMetrics.totalSessions} sessões concluídas`}
                 icon={<CheckCircle className="size-4" />}
               />
 
@@ -1174,7 +1216,7 @@ export function ScheduleScreen() {
                                       onClick={() => navigate('/simulados')}
                                     />
                                   )}
-                                  {s.status === 'planejada' && (
+                                  {(s.status === 'planejada' || s.status === 'concluida') && (
                                     <>
                                       <IconButton
                                         label="Editar sessão"
@@ -1187,20 +1229,24 @@ export function ScheduleScreen() {
                                           setSessionModalOpen(true);
                                         }}
                                       />
-                                      <IconButton
-                                        label="Concluir sessão (caso já tenha estudado sem cronômetro)"
-                                        icon={<Check className="size-3 text-success" />}
-                                        size="sm"
-                                        className="!size-5 hover:bg-success-soft"
-                                        onClick={() => void handleCompleteDirectly(s)}
-                                      />
-                                      <IconButton
-                                        label="Iniciar cronômetro para esta sessão"
-                                        icon={<Play className="size-3" />}
-                                        size="sm"
-                                        className="!size-5"
-                                        onClick={() => handleStartTimer(s)}
-                                      />
+                                      {s.status === 'planejada' && (
+                                        <>
+                                          <IconButton
+                                            label="Concluir sessão (caso já tenha estudado sem cronômetro)"
+                                            icon={<Check className="size-3 text-success" />}
+                                            size="sm"
+                                            className="!size-5 hover:bg-success-soft"
+                                            onClick={() => void handleCompleteDirectly(s)}
+                                          />
+                                          <IconButton
+                                            label="Iniciar cronômetro para esta sessão"
+                                            icon={<Play className="size-3" />}
+                                            size="sm"
+                                            className="!size-5"
+                                            onClick={() => handleStartTimer(s)}
+                                          />
+                                        </>
+                                      )}
                                       <IconButton
                                         label="Excluir sessão"
                                         icon={<Trash2 className="size-3 text-fg-subtle hover:text-danger" />}
@@ -1322,7 +1368,7 @@ export function ScheduleScreen() {
         onClose={() => setGenerateModalOpen(false)}
         onSuccess={(msg) => {
           setActionSuccess(msg);
-          setSelectedWeekIndex(1);
+          autoSelectedWeekKeyRef.current = null;
         }}
         defaultStartDate={generateStartDate}
       />

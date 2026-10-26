@@ -814,14 +814,6 @@ export function ScheduleScreen() {
             description={`Meta planejada: ${formatMinutes(effectivePlannedMinutes)}`}
             actions={
               <div className="flex items-center gap-2">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  icon={<Plus className="size-3.5" />}
-                  onClick={() => openNewSession()}
-                >
-                  Planejar Sessão
-                </Button>
                 <Badge
                   tone={
                     effectivePlanStatus === 'concluida'
@@ -833,6 +825,14 @@ export function ScheduleScreen() {
                 >
                   {WEEKLY_PLAN_STATUS_LABELS[effectivePlanStatus]}
                 </Badge>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Plus className="size-3.5" />}
+                  onClick={() => openNewSession()}
+                >
+                  Planejar Sessão
+                </Button>
                 <Button
                   variant="secondary"
                   size="sm"

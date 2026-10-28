@@ -2915,7 +2915,53 @@ function extractJsonFromText(rawText: string): string {
   return trimmed;
 }
 
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+const FALLBACK_GEMINI_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-3.8-flash',
+  'gemini-4-argon',
+];
+
+/**
+ * Consulta dinamicamente a lista de modelos suportados para generateContent na chave de API informada.
+ * Se houver erro de rede ou na chamada de listagem, recorre à lista de fallback.
+ */
+async function getAvailableGeminiModels(apiKey: string): Promise<string[]> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+      { signal: controller.signal },
+    ).finally(() => clearTimeout(timer));
+
+    if (response.ok) {
+      const data = (await response.json()) as {
+        models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+      };
+      if (Array.isArray(data.models) && data.models.length > 0) {
+        const models = data.models
+          .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+          .map((m) => (m.name ?? '').replace(/^models\//, ''))
+          .filter((name) => Boolean(name) && !name.includes('embedding') && !name.includes('aqa'));
+
+        if (models.length > 0) {
+          // Prioriza modelos flash ou mais rápidos
+          models.sort((a, b) => {
+            const aFlash = a.includes('flash') ? -1 : 1;
+            const bFlash = b.includes('flash') ? -1 : 1;
+            return aFlash - bFlash;
+          });
+          return models;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Não foi possível listar modelos dinamicamente do Gemini, usando fallback:', err);
+  }
+  return FALLBACK_GEMINI_MODELS;
+}
 
 /** Formata a listagem completa e literal do Edital Verticalizado BNB 2022 para instruir o Gemini sem desvios. */
 export function formatEditalVerticalizadoForPrompt(): string {
@@ -2939,14 +2985,15 @@ export function formatEditalVerticalizadoForPrompt(): string {
     .join('\n\n');
 }
 
-/** Chama generateContent (tentando modelos em ordem) e devolve o array "weeks" já interpretado. */
+/** Chama generateContent (tentando modelos disponíveis) e devolve o array "weeks" já interpretado. */
 async function requestGeminiWeeks(
   apiKey: string,
   systemInstruction: string,
   userPrompt: string,
+  availableModels: string[],
 ): Promise<AiWeekTemplate[]> {
   let lastError = 'sem resposta';
-  for (const model of GEMINI_MODELS) {
+  for (const model of availableModels) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 120_000);
     try {
@@ -3068,9 +3115,11 @@ Responda apenas com o JSON {"weeks":[...]} contendo ${to - from + 1} semanas.${e
   const chunks: Array<[number, number]> = [];
   for (let from = 1; from <= 24; from += CHUNK_SIZE) chunks.push([from, from + CHUNK_SIZE - 1]);
 
+  const availableModels = await getAvailableGeminiModels(apiKey);
+
   const chunkResults = await Promise.all(
     chunks.map(([from, to]) =>
-      requestGeminiWeeks(apiKey, systemInstruction, buildUserPrompt(from, to)).catch((err: unknown) => err),
+      requestGeminiWeeks(apiKey, systemInstruction, buildUserPrompt(from, to), availableModels).catch((err: unknown) => err),
     ),
   );
 

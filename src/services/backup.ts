@@ -194,11 +194,19 @@ export async function createBackup(): Promise<BackupFile> {
   const entries = await db.transaction('r', DATA_TABLES.map((t) => db.table(t)), async () =>
     Promise.all(DATA_TABLES.map(async (t) => [t, await db.table(t).toArray()] as const)),
   );
+  const data = Object.fromEntries(entries) as BackupData;
+  if (Array.isArray(data.settings)) {
+    data.settings = data.settings.map((s) => {
+      const sanitized = { ...(s as Record<string, unknown>) };
+      delete sanitized.geminiApiKey;
+      return sanitized as BackupData['settings'][number];
+    });
+  }
   return {
     app: BACKUP_APP_ID,
     schemaVersion: SCHEMA_VERSION,
     exportedAt: new Date().toISOString(),
-    data: Object.fromEntries(entries) as BackupData,
+    data,
   };
 }
 

@@ -1,0 +1,92 @@
+import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { parseStudyWorkspaceDto, type StudyWorkspaceDto } from '../dtos/study-data.dto';
+import type { IPasswordHasher } from '../interfaces/IPasswordHasher';
+import type { IStudyDataRepository } from '../interfaces/IStudyDataRepository';
+import type { IUserRepository } from '../interfaces/IUserRepository';
+
+export interface SeedDefaultUserOptions {
+  userRepository: IUserRepository;
+  studyDataRepository: IStudyDataRepository;
+  passwordHasher: IPasswordHasher;
+  email: string;
+  password: string;
+  name: string;
+  seedFilePath?: string;
+}
+
+function resolveDefaultSeedPath(): string {
+  return resolve(process.cwd(), 'data', 'initial-workspace.seed.json');
+}
+
+export function loadFirefoxSeedWorkspace(seedFilePath?: string): StudyWorkspaceDto | null {
+  const path = seedFilePath ?? resolveDefaultSeedPath();
+  if (!existsSync(path)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as { data?: unknown };
+    if (!raw || typeof raw !== 'object' || !raw.data) return null;
+    const workspace = parseStudyWorkspaceDto(raw.data);
+    // LGPD / Secret Protection: never seed third-party API keys from static dump files
+    if (Array.isArray(workspace.settings)) {
+      workspace.settings = workspace.settings.map((s) => ({
+        ...s,
+        geminiApiKey: '',
+      }));
+    }
+    return workspace;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Garante de forma idempotente o provisionamento opcional do usuário inicial configurado
+ * via variáveis de ambiente (.env), vinculando os dados locais ao seu `user_id` com senha hasheada.
+ */
+export async function ensureDefaultUserAndFirefoxData(
+  options: SeedDefaultUserOptions,
+): Promise<string> {
+  const email = options.email.trim().toLowerCase();
+  const password = options.password;
+  const name = options.name.trim() || 'Titular da Conta';
+
+  if (!email || !password) {
+    return '';
+  }
+
+  const { userRepository, studyDataRepository, passwordHasher } = options;
+
+  let user = userRepository.findByEmail(email);
+  const now = new Date().toISOString();
+
+  if (!user) {
+    const passwordHash = await passwordHasher.hash(password);
+    user = userRepository.create({
+      id: randomUUID(),
+      name,
+      email,
+      passwordHash,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  const currentWorkspace = studyDataRepository.getWorkspace(user.id);
+  const isUnpopulated =
+    currentWorkspace.topics.length === 0 &&
+    currentWorkspace.sessions.length === 0 &&
+    currentWorkspace.questionLogs.length === 0 &&
+    currentWorkspace.weeklyPlans.length === 0;
+
+  if (isUnpopulated) {
+    const seedWorkspace = loadFirefoxSeedWorkspace(options.seedFilePath);
+    if (seedWorkspace) {
+      studyDataRepository.replaceWorkspace(user.id, seedWorkspace);
+    } else {
+      studyDataRepository.ensureUserSeed(user.id);
+    }
+  }
+
+  return user.id;
+}

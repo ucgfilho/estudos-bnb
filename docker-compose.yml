@@ -9,3 +9,12 @@ services:
       - "${PORT:-8080}:80"
     environment:
       - NODE_ENV=production
+      - PORT=80
+      - DB_PATH=/app/data/bnb_estudos.sqlite
+      - SEED_FILE_PATH=/app/data/initial-workspace.seed.json
+      - JWT_SECRET=${JWT_SECRET:-}
+      - DEFAULT_USER_EMAIL=${DEFAULT_USER_EMAIL:-}
+      - DEFAULT_USER_PASSWORD=${DEFAULT_USER_PASSWORD:-}
+      - DEFAULT_USER_NAME=${DEFAULT_USER_NAME:-}
+    volumes:
+      - ./data:/app/data

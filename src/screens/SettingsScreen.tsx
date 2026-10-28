@@ -8,6 +8,7 @@ import {
   Target,
   Sparkles,
   ExternalLink,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card, PageHeader, Alert } from '../components/ui/Display';
@@ -16,6 +17,7 @@ import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { useSettings } from '../hooks/useData';
 import { useCelebrationsEnabled } from '../hooks/useCelebrationPrefs';
 import { updateSettings } from '../services/settings';
+import { deleteUserAccount } from '../services/auth';
 import {
   createBackup,
   validateBackup,
@@ -24,7 +26,7 @@ import {
   type BackupFile,
   type DataTableName,
 } from '../services/backup';
-import { resetDatabase } from '../db/db';
+import { db, resetDatabase } from '../db/db';
 import { parseIntervals } from '../domain/reviews';
 import { todayKey, formatDate } from '../lib/dates';
 import type { ThemePreference } from '../db/types';
@@ -58,6 +60,7 @@ export function SettingsScreen() {
 
   // Reset states
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [deleteAccountConfirmOpen, setDeleteAccountConfirmOpen] = useState(false);
 
   // Messages
   const [actionError, setActionError] = useState<string | null>(null);
@@ -197,6 +200,21 @@ export function SettingsScreen() {
       await resetDatabase();
       setResetConfirmOpen(false);
       setActionSuccess('O sistema foi reiniciado. As disciplinas padrão foram restauradas.');
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Delete Account and all personal data (LGPD Art. 18, VI)
+  const handleConfirmDeleteAccount = async () => {
+    setActionError(null);
+    setLoading(true);
+    try {
+      await deleteUserAccount();
+      db.clearMemory();
+      setDeleteAccountConfirmOpen(false);
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {
@@ -467,6 +485,25 @@ export function SettingsScreen() {
               Reiniciar Sistema
             </Button>
           </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border border-danger/40 bg-danger-soft/20 p-4">
+            <div>
+              <div className="font-semibold text-sm text-danger">
+                Excluir Minha Conta e Dados Pessoais (LGPD — Art. 18, VI)
+              </div>
+              <p className="text-xs text-fg-muted mt-0.5">
+                Elimina permanentemente seu cadastro e todos os dados vinculados no banco de dados.
+              </p>
+            </div>
+            <Button
+              variant="danger"
+              size="sm"
+              icon={<Trash2 className="size-4" />}
+              onClick={() => setDeleteAccountConfirmOpen(true)}
+            >
+              Excluir Conta e Dados
+            </Button>
+          </div>
         </div>
       </Card>
 
@@ -513,6 +550,18 @@ export function SettingsScreen() {
         confirmLabel="Sim, Reiniciar Tudo"
         variant="danger"
         onConfirm={handleConfirmReset}
+        loading={loading}
+      />
+
+      {/* Confirmation Modal for LGPD Account Deletion */}
+      <ConfirmModal
+        open={deleteAccountConfirmOpen}
+        onClose={() => setDeleteAccountConfirmOpen(false)}
+        title="Excluir Permanentemente Sua Conta e Dados Pessoais?"
+        message="Em conformidade com o Art. 18, VI da LGPD (Lei nº 13.709/2018), esta ação eliminará de forma definitiva e irreversível a sua conta de usuário e todos os seus dados de estudo vinculados no banco de dados."
+        confirmLabel="Sim, Excluir Minha Conta"
+        variant="danger"
+        onConfirm={handleConfirmDeleteAccount}
         loading={loading}
       />
     </div>

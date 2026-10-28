@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from '../../App';
 import { db, ensureSeed, resetDatabase } from '../../db/db';
+import { setAuthSession, TEST_BYPASS_TOKEN } from '../../services/auth';
 
 async function openScreen() {
   window.location.hash = '#/simulados';
@@ -12,6 +13,17 @@ async function openScreen() {
 
 describe('Simulados screen', () => {
   beforeEach(async () => {
+    setAuthSession({
+      token: TEST_BYPASS_TOKEN,
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: {
+        id: 'test-user',
+        name: 'Analista Teste',
+        email: 'analista.teste@exemplo.local',
+        createdAt: '2026-10-28T00:00:00.000Z',
+      },
+    });
     await resetDatabase(db);
     await ensureSeed();
   });

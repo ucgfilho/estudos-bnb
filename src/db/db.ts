@@ -1,142 +1,494 @@
-import { Dexie, type EntityTable } from 'dexie';
 import { addDays, startOfWeek, weekdayIndex } from '../lib/dates';
-import type {
-  Discipline,
-  ErrorNote,
-  MockExam,
-  QuestionLog,
-  ReviewTask,
-  Settings,
-  StudySession,
-  TimerState,
-  Topic,
-  WeeklyPlan,
-} from './types';
-import { SETTINGS_ID } from './types';
+import {
+  fetchUserWorkspaceFromApi,
+  getAuthToken,
+  syncBatchMutationsToApi,
+  type RemoteTableMutation,
+} from '../services/auth';
 import { DEFAULT_DISCIPLINES, DEFAULT_SETTINGS } from './seed';
+import {
+  DATA_TABLES,
+  SETTINGS_ID,
+  type DataTableName,
+  type Discipline,
+  type ErrorNote,
+  type MockExam,
+  type QuestionLog,
+  type ReviewTask,
+  type Settings,
+  type StudySession,
+  type TimerState,
+  type Topic,
+  type WeeklyPlan,
+} from './types';
+
+export { DATA_TABLES, type DataTableName };
 
 export const DB_NAME = 'bnb-estudos';
-
-/**
- * Versão atual do schema de armazenamento.
- * Estratégia de migração: cada nova versão adiciona um bloco
- * `db.version(N).stores(...).upgrade(...)` mantendo os anteriores; o Dexie
- * aplica as migrações em sequência ao abrir o banco. Backups JSON carregam
- * `schemaVersion` e passam por `migrateBackup` antes da importação.
- */
 export const SCHEMA_VERSION = 2;
 
-export type AppDatabase = Dexie & {
-  disciplines: EntityTable<Discipline, 'id'>;
-  topics: EntityTable<Topic, 'id'>;
-  sessions: EntityTable<StudySession, 'id'>;
-  timer: EntityTable<TimerState, 'id'>;
-  questionLogs: EntityTable<QuestionLog, 'id'>;
-  errorNotes: EntityTable<ErrorNote, 'id'>;
-  reviews: EntityTable<ReviewTask, 'id'>;
-  weeklyPlans: EntityTable<WeeklyPlan, 'id'>;
-  settings: EntityTable<Settings, 'id'>;
-  mockExams: EntityTable<MockExam, 'id'>;
-};
+function cloneRecord<T>(value: T): T {
+  return structuredClone(value);
+}
 
-export function createDatabase(name: string = DB_NAME): AppDatabase {
-  const database = new Dexie(name) as AppDatabase;
+export interface TableCollection<T extends { id: string }> {
+  toArray(): Promise<T[]>;
+  first(): Promise<T | undefined>;
+  count(): Promise<number>;
+  primaryKeys(): Promise<string[]>;
+  filter(predicate: (item: T) => boolean): TableCollection<T>;
+  modify(changes: Partial<T> | ((item: T) => void)): Promise<number>;
+  delete(): Promise<number>;
+}
 
-  database.version(1).stores({
-    disciplines: 'id, order',
-    topics: 'id, disciplineId, parentTopicId, order',
-    sessions: 'id, date, disciplineId, topicId, status',
-    timer: 'id',
-    questionLogs: 'id, date, disciplineId, topicId, source',
-    errorNotes: 'id, disciplineId, topicId, status, errorDate',
-    reviews: 'id, dueDate, status, topicId, errorNoteId',
-    weeklyPlans: 'id, &weekIndex, weekStart',
-    settings: 'id',
-  });
+export class MemoryTable<T extends { id: string }> {
+  public readonly name: DataTableName;
+  private readonly items = new Map<string, T>();
+  private readonly onMutation: (mutation: RemoteTableMutation) => void;
 
-  // v2: simulados (gabarito, respostas e resultado).
-  database.version(SCHEMA_VERSION).stores({
-    mockExams: 'id, createdAt, submittedAt',
-  });
+  constructor(name: DataTableName, onMutation: (mutation: RemoteTableMutation) => void) {
+    this.name = name;
+    this.onMutation = onMutation;
+  }
 
-  database.on('populate', (tx) => {
-    tx.table('disciplines').bulkAdd(DEFAULT_DISCIPLINES);
-    tx.table('settings').add({ ...DEFAULT_SETTINGS, distribution: { ...DEFAULT_SETTINGS.distribution } });
-  });
+  public replaceAllSilent(records: readonly T[]): void {
+    this.items.clear();
+    for (const r of records) {
+      this.items.set(r.id, cloneRecord(r));
+    }
+  }
 
-  return database;
+  public clearSilent(): void {
+    this.items.clear();
+  }
+
+  public toArraySync(): T[] {
+    return Array.from(this.items.values()).map(cloneRecord);
+  }
+
+  public getSync(id: string): T | undefined {
+    const found = this.items.get(id);
+    return found ? cloneRecord(found) : undefined;
+  }
+
+  public async toArray(): Promise<T[]> {
+    return this.toArraySync();
+  }
+
+  public async get(id: string): Promise<T | undefined> {
+    return this.getSync(id);
+  }
+
+  public async count(): Promise<number> {
+    return this.items.size;
+  }
+
+  public async add(item: T): Promise<string> {
+    const copy = cloneRecord(item);
+    this.items.set(copy.id, copy);
+    this.onMutation({ table: this.name, action: 'upsert', records: [copy] });
+    return copy.id;
+  }
+
+  public async put(item: T): Promise<string> {
+    const copy = cloneRecord(item);
+    this.items.set(copy.id, copy);
+    this.onMutation({ table: this.name, action: 'upsert', records: [copy] });
+    return copy.id;
+  }
+
+  public async update(id: string, changes: Partial<T>): Promise<number> {
+    const existing = this.items.get(id);
+    if (!existing) return 0;
+    const updated = cloneRecord({ ...existing, ...changes, id });
+    this.items.set(id, updated);
+    this.onMutation({ table: this.name, action: 'upsert', records: [updated] });
+    return 1;
+  }
+
+  public async delete(id: string): Promise<void> {
+    if (this.items.delete(id)) {
+      this.onMutation({ table: this.name, action: 'delete', ids: [id] });
+    }
+  }
+
+  public async bulkAdd(records: readonly T[]): Promise<string> {
+    if (records.length === 0) return '';
+    const copies = records.map(cloneRecord);
+    for (const c of copies) {
+      this.items.set(c.id, c);
+    }
+    this.onMutation({ table: this.name, action: 'upsert', records: copies });
+    return copies[copies.length - 1].id;
+  }
+
+  public async bulkPut(records: readonly T[]): Promise<string> {
+    return this.bulkAdd(records);
+  }
+
+  public async bulkDelete(ids: readonly string[]): Promise<void> {
+    const deleted: string[] = [];
+    for (const id of ids) {
+      if (this.items.delete(id)) {
+        deleted.push(id);
+      }
+    }
+    if (deleted.length > 0) {
+      this.onMutation({ table: this.name, action: 'delete', ids: deleted });
+    }
+  }
+
+  public async clear(): Promise<void> {
+    this.items.clear();
+    this.onMutation({ table: this.name, action: 'clear' });
+  }
+
+  public orderBy(field: keyof T & string): {
+    toArray(): Promise<T[]>;
+    first(): Promise<T | undefined>;
+  } {
+    const getSorted = (): T[] => {
+      const list = this.toArraySync();
+      list.sort((a, b) => {
+        const va = a[field];
+        const vb = b[field];
+        if (va === vb) return 0;
+        if (va === undefined || va === null) return 1;
+        if (vb === undefined || vb === null) return -1;
+        return va < vb ? -1 : 1;
+      });
+      return list;
+    };
+    return {
+      toArray: async () => getSorted(),
+      first: async () => getSorted()[0],
+    };
+  }
+
+  public toCollection(): TableCollection<T> {
+    return this.createCollection(() => true);
+  }
+
+  public filter(predicate: (item: T) => boolean): TableCollection<T> {
+    return this.createCollection(predicate);
+  }
+
+  public where(field: (keyof T & string) | 'id'): {
+    equals(value: unknown): TableCollection<T>;
+    anyOf(values: readonly unknown[]): TableCollection<T>;
+    between(
+      lower: unknown,
+      upper: unknown,
+      includeLower?: boolean,
+      includeUpper?: boolean,
+    ): TableCollection<T>;
+  } {
+    return {
+      equals: (value: unknown) =>
+        this.createCollection((item) => item[field as keyof T] === value),
+      anyOf: (values: readonly unknown[]) => {
+        const set = new Set(values);
+        return this.createCollection((item) => set.has(item[field as keyof T]));
+      },
+      between: (
+        lower: unknown,
+        upper: unknown,
+        includeLower = true,
+        includeUpper = true,
+      ) =>
+        this.createCollection((item) => {
+          const v = item[field as keyof T] as string | number;
+          const lo = lower as string | number;
+          const hi = upper as string | number;
+          const aboveLow = includeLower ? v >= lo : v > lo;
+          const belowHigh = includeUpper ? v <= hi : v < hi;
+          return aboveLow && belowHigh;
+        }),
+    };
+  }
+
+  private createCollection(predicate: (item: T) => boolean): TableCollection<T> {
+    const matchItems = (): T[] => this.toArraySync().filter(predicate);
+
+    return {
+      toArray: async () => matchItems(),
+      first: async () => matchItems()[0],
+      count: async () => matchItems().length,
+      primaryKeys: async () => matchItems().map((i) => i.id),
+      filter: (nextPred: (item: T) => boolean) =>
+        this.createCollection((item) => predicate(item) && nextPred(item)),
+      modify: async (changes: Partial<T> | ((item: T) => void)) => {
+        const matched = matchItems();
+        if (matched.length === 0) return 0;
+        const updatedRecords: T[] = [];
+        for (const item of matched) {
+          const copy = cloneRecord(item);
+          if (typeof changes === 'function') {
+            changes(copy);
+          } else {
+            Object.assign(copy, changes);
+          }
+          this.items.set(copy.id, copy);
+          updatedRecords.push(copy);
+        }
+        this.onMutation({ table: this.name, action: 'upsert', records: updatedRecords });
+        return updatedRecords.length;
+      },
+      delete: async () => {
+        const matched = matchItems();
+        if (matched.length === 0) return 0;
+        const ids = matched.map((i) => i.id);
+        await this.bulkDelete(ids);
+        return ids.length;
+      },
+    };
+  }
+}
+
+/**
+ * Store reativo em memória sincronizado com o banco de dados relacional do backend via REST API (Bearer JWT).
+ * Substitui integralmente o IndexedDB no navegador.
+ */
+export class AppDatabase {
+  public readonly disciplines: MemoryTable<Discipline>;
+  public readonly topics: MemoryTable<Topic>;
+  public readonly sessions: MemoryTable<StudySession>;
+  public readonly timer: MemoryTable<TimerState>;
+  public readonly questionLogs: MemoryTable<QuestionLog>;
+  public readonly errorNotes: MemoryTable<ErrorNote>;
+  public readonly reviews: MemoryTable<ReviewTask>;
+  public readonly weeklyPlans: MemoryTable<WeeklyPlan>;
+  public readonly settings: MemoryTable<Settings>;
+  public readonly mockExams: MemoryTable<MockExam>;
+
+  private readonly listeners = new Set<() => void>();
+  private txDepth = 0;
+  private pendingMutations: RemoteTableMutation[] = [];
+  private versionCounter = 0;
+
+  constructor() {
+    const handleMutation = (mutation: RemoteTableMutation) => {
+      this.versionCounter++;
+      if (this.txDepth > 0) {
+        this.pendingMutations.push(mutation);
+      } else {
+        this.notifyListeners();
+        void syncBatchMutationsToApi([mutation]);
+      }
+    };
+
+    this.disciplines = new MemoryTable<Discipline>('disciplines', handleMutation);
+    this.topics = new MemoryTable<Topic>('topics', handleMutation);
+    this.sessions = new MemoryTable<StudySession>('sessions', handleMutation);
+    this.timer = new MemoryTable<TimerState>('timer', handleMutation);
+    this.questionLogs = new MemoryTable<QuestionLog>('questionLogs', handleMutation);
+    this.errorNotes = new MemoryTable<ErrorNote>('errorNotes', handleMutation);
+    this.reviews = new MemoryTable<ReviewTask>('reviews', handleMutation);
+    this.weeklyPlans = new MemoryTable<WeeklyPlan>('weeklyPlans', handleMutation);
+    this.settings = new MemoryTable<Settings>('settings', handleMutation);
+    this.mockExams = new MemoryTable<MockExam>('mockExams', handleMutation);
+
+    this.seedDefaultsSilent();
+  }
+
+  public seedDefaultsSilent(): void {
+    this.disciplines.replaceAllSilent(DEFAULT_DISCIPLINES);
+    this.settings.replaceAllSilent([
+      { ...DEFAULT_SETTINGS, distribution: { ...DEFAULT_SETTINGS.distribution } },
+    ]);
+  }
+
+  public table(name: DataTableName): MemoryTable<{ id: string }> {
+    return this[name] as unknown as MemoryTable<{ id: string }>;
+  }
+
+  public subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  public getSnapshotVersion(): number {
+    return this.versionCounter;
+  }
+
+  private notifyListeners(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  public hydrateFromWorkspace(workspace: Partial<Record<DataTableName, unknown[]>>): void {
+    for (const tableName of DATA_TABLES) {
+      const rows = workspace[tableName];
+      if (Array.isArray(rows)) {
+        this.table(tableName).replaceAllSilent(rows as { id: string }[]);
+      } else {
+        this.table(tableName).clearSilent();
+      }
+    }
+    this.versionCounter++;
+    this.notifyListeners();
+  }
+
+  public clearMemory(): void {
+    for (const tableName of DATA_TABLES) {
+      this.table(tableName).clearSilent();
+    }
+    this.seedDefaultsSilent();
+    this.versionCounter++;
+    this.notifyListeners();
+  }
+
+  public async transaction<R>(
+    mode: 'r' | 'rw',
+    t1: unknown,
+    callback: () => Promise<R> | R,
+  ): Promise<R>;
+  public async transaction<R>(
+    mode: 'r' | 'rw',
+    t1: unknown,
+    t2: unknown,
+    callback: () => Promise<R> | R,
+  ): Promise<R>;
+  public async transaction<R>(
+    mode: 'r' | 'rw',
+    t1: unknown,
+    t2: unknown,
+    t3: unknown,
+    callback: () => Promise<R> | R,
+  ): Promise<R>;
+  public async transaction<R>(
+    mode: 'r' | 'rw',
+    t1: unknown,
+    t2: unknown,
+    t3: unknown,
+    t4: unknown,
+    callback: () => Promise<R> | R,
+  ): Promise<R>;
+  public async transaction<R>(_mode: 'r' | 'rw', ...args: unknown[]): Promise<R> {
+    const callback = args[args.length - 1] as () => Promise<R> | R;
+    this.txDepth++;
+    try {
+      const result = await callback();
+      return result;
+    } finally {
+      this.txDepth--;
+      if (this.txDepth === 0 && this.pendingMutations.length > 0) {
+        const batch = this.pendingMutations;
+        this.pendingMutations = [];
+        this.notifyListeners();
+        void syncBatchMutationsToApi(batch);
+      }
+    }
+  }
+
+  public async delete(): Promise<void> {
+    this.clearMemory();
+  }
+
+  public async open(): Promise<this> {
+    return this;
+  }
+}
+
+export function createDatabase(): AppDatabase {
+  return new AppDatabase();
 }
 
 export const db = createDatabase();
 
-/** Tabelas incluídas em backup/restauração. */
-export const DATA_TABLES = [
-  'disciplines',
-  'topics',
-  'sessions',
-  'timer',
-  'questionLogs',
-  'errorNotes',
-  'reviews',
-  'weeklyPlans',
-  'settings',
-  'mockExams',
-] as const;
-
-export type DataTableName = (typeof DATA_TABLES)[number];
-
 /**
- * Garante que as oito disciplinas e as configurações existam
- * (idempotente; usado na inicialização e após reinício do sistema).
+ * Sincroniza o estado em memória com o banco de dados do usuário autenticado (quando houver token)
+ * e garante que as oito disciplinas e as configurações existam.
  */
 export async function ensureSeed(database: AppDatabase = db): Promise<void> {
-  await database.transaction('rw', database.disciplines, database.settings, database.weeklyPlans, database.sessions, async () => {
-    const existingList = await database.disciplines.toArray();
-    const existing = new Set(existingList.map((d) => d.id));
-    const missing = DEFAULT_DISCIPLINES.filter((d) => !existing.has(d.id));
-    if (missing.length > 0) await database.disciplines.bulkAdd(missing);
-
-    // Atualiza automaticamente as cores antigas para a paleta oficial do BNB
-    const oldPalette = ['#2563eb', '#7c3aed', '#0d9488', '#c2410c', '#be123c', '#4d7c0f', '#a16207', '#0369a1'];
-    for (const def of DEFAULT_DISCIPLINES) {
-      const current = existingList.find((d) => d.id === def.id);
-      if (current && oldPalette.includes(current.color) && current.color !== def.color) {
-        await database.disciplines.update(current.id, { color: def.color });
+  if (database === db && getAuthToken()) {
+    try {
+      const remoteWorkspace = await fetchUserWorkspaceFromApi();
+      if (remoteWorkspace) {
+        database.hydrateFromWorkspace(remoteWorkspace);
       }
+    } catch (err) {
+      console.error('Erro ao carregar dados do servidor:', err);
     }
-    const settings = await database.settings.get(SETTINGS_ID);
-    if (!settings) {
-      await database.settings.add({ ...DEFAULT_SETTINGS, distribution: { ...DEFAULT_SETTINGS.distribution } });
-    } else {
-      // Completa campos ausentes (ex.: backup antigo) sem sobrescrever valores do usuário.
-      const merged: Settings = { ...DEFAULT_SETTINGS, ...settings, distribution: { ...DEFAULT_SETTINGS.distribution, ...settings.distribution } };
-      if (JSON.stringify(merged) !== JSON.stringify(settings)) await database.settings.put(merged);
-    }
+  }
 
-    // Normaliza planos semanais legados para começarem sempre no domingo
-    const plans = await database.weeklyPlans.toArray();
-    if (plans.length > 0 && plans.some((p) => weekdayIndex(p.weekStart) !== 0)) {
-      plans.sort((a, b) => a.weekIndex - b.weekIndex);
-      const newFirstStart = startOfWeek(plans[0].weekStart);
-      const allSessions = await database.sessions.toArray();
-      for (const plan of plans) {
-        const newStart = addDays(newFirstStart, (plan.weekIndex - 1) * 7);
-        const newEnd = addDays(newStart, 6);
-        const weekSessions = allSessions.filter((s) => s.date >= newStart && s.date <= newEnd);
-        const weekPlanned = weekSessions.reduce((sum, s) => sum + s.plannedMinutes, 0);
-        await database.weeklyPlans.update(plan.id, {
-          weekStart: newStart,
-          plannedMinutes: weekPlanned || plan.plannedMinutes,
+  await database.transaction(
+    'rw',
+    database.disciplines,
+    database.settings,
+    database.weeklyPlans,
+    database.sessions,
+    async () => {
+      const existingList = await database.disciplines.toArray();
+      const existing = new Set(existingList.map((d) => d.id));
+      const missing = DEFAULT_DISCIPLINES.filter((d) => !existing.has(d.id));
+      if (missing.length > 0) await database.disciplines.bulkAdd(missing);
+
+      const oldPalette = [
+        '#2563eb',
+        '#7c3aed',
+        '#0d9488',
+        '#c2410c',
+        '#be123c',
+        '#4d7c0f',
+        '#a16207',
+        '#0369a1',
+      ];
+      for (const def of DEFAULT_DISCIPLINES) {
+        const current = existingList.find((d) => d.id === def.id);
+        if (current && oldPalette.includes(current.color) && current.color !== def.color) {
+          await database.disciplines.update(current.id, { color: def.color });
+        }
+      }
+
+      const settings = await database.settings.get(SETTINGS_ID);
+      if (!settings) {
+        await database.settings.add({
+          ...DEFAULT_SETTINGS,
+          distribution: { ...DEFAULT_SETTINGS.distribution },
         });
+      } else {
+        const merged: Settings = {
+          ...DEFAULT_SETTINGS,
+          ...settings,
+          distribution: { ...DEFAULT_SETTINGS.distribution, ...settings.distribution },
+        };
+        if (JSON.stringify(merged) !== JSON.stringify(settings)) {
+          await database.settings.put(merged);
+        }
       }
-    }
-  });
+
+      const plans = await database.weeklyPlans.toArray();
+      if (plans.length > 0 && plans.some((p) => weekdayIndex(p.weekStart) !== 0)) {
+        plans.sort((a, b) => a.weekIndex - b.weekIndex);
+        const newFirstStart = startOfWeek(plans[0].weekStart);
+        const allSessions = await database.sessions.toArray();
+        for (const plan of plans) {
+          const newStart = addDays(newFirstStart, (plan.weekIndex - 1) * 7);
+          const newEnd = addDays(newStart, 6);
+          const weekSessions = allSessions.filter((s) => s.date >= newStart && s.date <= newEnd);
+          const weekPlanned = weekSessions.reduce((sum, s) => sum + s.plannedMinutes, 0);
+          await database.weeklyPlans.update(plan.id, {
+            weekStart: newStart,
+            plannedMinutes: weekPlanned || plan.plannedMinutes,
+          });
+        }
+      }
+    },
+  );
 }
 
-/** Apaga todos os dados e recria o estado inicial. */
+/** Apaga todos os dados do usuário e recria o estado inicial. */
 export async function resetDatabase(database: AppDatabase = db): Promise<void> {
-  await database.transaction('rw', DATA_TABLES.map((t) => database.table(t)), async () => {
-    for (const t of DATA_TABLES) await database.table(t).clear();
-  });
+  await database.transaction(
+    'rw',
+    DATA_TABLES.map((t) => database.table(t)),
+    async () => {
+      for (const t of DATA_TABLES) await database.table(t).clear();
+    },
+  );
   await ensureSeed(database);
 }

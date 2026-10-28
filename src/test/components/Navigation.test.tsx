@@ -3,20 +3,46 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from '../../App';
 import { db, ensureSeed } from '../../db/db';
+import { setAuthSession } from '../../services/auth';
 import { generateSchedule } from '../../services/schedule';
 import { createSession } from '../../services/sessions';
 import { startPlannedTimer } from '../../services/timer';
 import { addDays, startOfWeek, todayKey } from '../../lib/dates';
 
-describe('App Navigation and Screen Integration', () => {
+const TEST_SESSION = {
+  token: 'test-jwt-token',
+  tokenType: 'Bearer' as const,
+  expiresIn: 3600,
+  user: {
+    id: 'user-test-1',
+    name: 'Analista Teste',
+    email: 'analista.teste@exemplo.local',
+    createdAt: '2026-10-28T00:00:00.000Z',
+  },
+};
+
+describe('App Navigation, Auth Gate and Screen Integration', () => {
   beforeEach(async () => {
+    setAuthSession(null);
     await db.delete();
     await db.open();
     await ensureSeed();
     window.location.hash = '#/';
   });
 
-  it('renders overview screen initially and loads 8 mandatory disciplines', async () => {
+  it('requires login or registration before entering the platform when unauthenticated', async () => {
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: /acesse sua conta/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /entrar na plataforma/i })).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('tab', { name: /cadastrar/i }));
+    expect(screen.getByRole('heading', { name: /crie sua conta de estudos/i })).toBeInTheDocument();
+  });
+
+  it('renders overview screen when authenticated and loads 8 mandatory disciplines', async () => {
+    setAuthSession(TEST_SESSION);
     render(<App />);
 
     await waitFor(() => {
@@ -41,6 +67,7 @@ describe('App Navigation and Screen Integration', () => {
   });
 
   it('can navigate to all 10 primary screens without error', async () => {
+    setAuthSession(TEST_SESSION);
     const user = userEvent.setup();
     render(<App />);
 
@@ -112,6 +139,7 @@ describe('App Navigation and Screen Integration', () => {
   });
 
   it('automatically selects the current calendar week (Semana 2) when opening Cronograma', async () => {
+    setAuthSession(TEST_SESSION);
     const today = todayKey();
     const previousWeekStart = addDays(startOfWeek(today), -7);
     await generateSchedule(previousWeekStart, today);
@@ -125,6 +153,7 @@ describe('App Navigation and Screen Integration', () => {
   });
 
   it('updates document.title with elapsed time and discipline name during an active timer session', async () => {
+    setAuthSession(TEST_SESSION);
     const session = await createSession({
       date: todayKey(),
       disciplineId: 'portugues',

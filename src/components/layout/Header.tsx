@@ -9,12 +9,16 @@ import {
   Settings as SettingsIcon,
   Timer as TimerIcon,
   CalendarDays,
+  LogOut,
+  User as UserIcon,
 } from 'lucide-react';
 import { IconButton } from '../ui/Button';
 import { Badge } from '../ui/Display';
 import { SearchModal } from './SearchModal';
 import { useSettings, useActiveTimer, useNow } from '../../hooks/useData';
 import { updateSettings } from '../../services/settings';
+import { getAuthSession, setAuthSession, subscribeAuth } from '../../services/auth';
+import { db } from '../../db/db';
 import { todayKey, formatLongDate } from '../../lib/dates';
 import { daysUntil } from '../../domain/metrics';
 import { elapsedSeconds } from '../../domain/timer';
@@ -28,11 +32,18 @@ interface HeaderProps {
 
 export function Header({ onToggleMobileMenu }: HeaderProps) {
   const [searchOpen, setSearchOpen] = useState(false);
+  const [authUser, setAuthUser] = useState(() => getAuthSession()?.user ?? null);
   const settings = useSettings();
   const timer = useActiveTimer();
   const now = useNow(1000, Boolean(timer && timer.status === 'running'));
   const today = todayKey(now);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    return subscribeAuth(() => {
+      setAuthUser(getAuthSession()?.user ?? null);
+    });
+  }, []);
 
   const themePreference = settings?.theme;
 
@@ -70,6 +81,11 @@ export function Header({ onToggleMobileMenu }: HeaderProps) {
     };
     const current = settings?.theme ?? 'system';
     await updateSettings({ theme: next[current] });
+  };
+
+  const handleLogout = () => {
+    db.clearMemory();
+    setAuthSession(null);
   };
 
   const themeIcon = {
@@ -130,6 +146,16 @@ export function Header({ onToggleMobileMenu }: HeaderProps) {
             </button>
           )}
 
+          {authUser && (
+            <div
+              className="hidden md:inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-muted px-2.5 py-1 text-xs font-medium text-fg-muted"
+              title={`Conectado como ${authUser.email}`}
+            >
+              <UserIcon className="size-3.5 text-primary shrink-0" />
+              <span className="max-w-36 truncate">{authUser.email}</span>
+            </div>
+          )}
+
           <IconButton
             label="Buscar conteúdo (Ctrl+K ou /)"
             icon={<Search className="size-4" />}
@@ -145,6 +171,12 @@ export function Header({ onToggleMobileMenu }: HeaderProps) {
           <Link to="/configuracoes">
             <IconButton label="Configurações" icon={<SettingsIcon className="size-4" />} />
           </Link>
+
+          <IconButton
+            label="Sair da conta"
+            icon={<LogOut className="size-4" />}
+            onClick={handleLogout}
+          />
         </div>
       </header>
 

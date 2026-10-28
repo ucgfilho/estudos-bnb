@@ -1,4 +1,3 @@
-import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom/vitest';
 
 // Polyfill scrollTo and resize observer if needed in tests

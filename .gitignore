@@ -3,9 +3,20 @@ node_modules/
 
 # Build output and bundler caches
 dist/
+dist-server/
 .vite/
 .cache/
 *.tsbuildinfo
+
+# Relational database files, backups and user data seeds (LGPD / PII protection)
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+server/database/seeds/
+*user-data*.json
+tasks/
 
 # Test and coverage output
 coverage/

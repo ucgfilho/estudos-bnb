@@ -6,7 +6,8 @@
   "description": "Dashboard pessoal de estudos para o concurso do BNB — Analista de Sistemas (Desenvolvimento de Sistemas).",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build --ssr server/index.ts --outDir dist-server",
+    "start": "node dist-server/index.js",
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",

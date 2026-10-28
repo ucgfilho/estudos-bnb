@@ -247,3 +247,19 @@ export interface MockExam {
   createdAt: string;
   updatedAt: string;
 }
+
+/** Tabelas incluídas em backup, sincronização e restauração. */
+export const DATA_TABLES = [
+  'disciplines',
+  'topics',
+  'sessions',
+  'timer',
+  'questionLogs',
+  'errorNotes',
+  'reviews',
+  'weeklyPlans',
+  'settings',
+  'mockExams',
+] as const;
+
+export type DataTableName = (typeof DATA_TABLES)[number];

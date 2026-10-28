@@ -1,55 +1,69 @@
 import { useEffect, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db';
 import { ACTIVE_TIMER_ID, SETTINGS_ID } from '../db/types';
 import { todayKey } from '../lib/dates';
 
 /*
- * Hooks de leitura reativa (Dexie liveQuery). Retornam `undefined` enquanto
- * carregam, permitindo estados de carregamento explícitos nas telas.
+ * Hooks de leitura reativa conectados ao store sincronizado com o banco de dados do usuário.
  */
 
-const EMPTY_ARRAY: never[] = [];
+function useReactiveQuery<T>(reader: () => T): T {
+  const [state, setState] = useState<T>(() => reader());
+
+  useEffect(() => {
+    setState(reader());
+    return db.subscribe(() => {
+      setState(reader());
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return state;
+}
 
 export function useDisciplines() {
-  return useLiveQuery(() => db.disciplines.orderBy('order').toArray(), [], EMPTY_ARRAY);
+  return useReactiveQuery(() =>
+    db.disciplines.toArraySync().sort((a, b) => a.order - b.order),
+  );
 }
 
 export function useTopics() {
-  return useLiveQuery(() => db.topics.toArray(), [], EMPTY_ARRAY);
+  return useReactiveQuery(() => db.topics.toArraySync());
 }
 
 export function useSessions() {
-  return useLiveQuery(() => db.sessions.toArray(), [], EMPTY_ARRAY);
+  return useReactiveQuery(() => db.sessions.toArraySync());
 }
 
 export function useQuestionLogs() {
-  return useLiveQuery(() => db.questionLogs.toArray(), [], EMPTY_ARRAY);
+  return useReactiveQuery(() => db.questionLogs.toArraySync());
 }
 
 export function useErrorNotes() {
-  return useLiveQuery(() => db.errorNotes.toArray(), [], EMPTY_ARRAY);
+  return useReactiveQuery(() => db.errorNotes.toArraySync());
 }
 
 export function useReviews() {
-  return useLiveQuery(() => db.reviews.toArray(), [], EMPTY_ARRAY);
+  return useReactiveQuery(() => db.reviews.toArraySync());
 }
 
 export function useWeeklyPlans() {
-  return useLiveQuery(() => db.weeklyPlans.orderBy('weekIndex').toArray(), [], EMPTY_ARRAY);
+  return useReactiveQuery(() =>
+    db.weeklyPlans.toArraySync().sort((a, b) => a.weekIndex - b.weekIndex),
+  );
 }
 
 export function useMockExams() {
-  return useLiveQuery(() => db.mockExams.toArray(), [], EMPTY_ARRAY);
+  return useReactiveQuery(() => db.mockExams.toArraySync());
 }
 
 export function useSettings() {
-  return useLiveQuery(() => db.settings.get(SETTINGS_ID), []);
+  return useReactiveQuery(() => db.settings.getSync(SETTINGS_ID));
 }
 
-/** `null` quando não há cronômetro ativo; `undefined` enquanto carrega. */
+/** `null` quando não há cronômetro ativo. */
 export function useActiveTimer() {
-  return useLiveQuery(async () => (await db.timer.get(ACTIVE_TIMER_ID)) ?? null, []);
+  return useReactiveQuery(() => db.timer.getSync(ACTIVE_TIMER_ID) ?? null);
 }
 
 /** Instante atual, atualizado periodicamente (apenas para re-renderização). */

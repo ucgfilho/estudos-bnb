@@ -1,4 +1,4 @@
-# Multi-stage build for minimal production image
+# Multi-stage build for full-stack production image (Frontend SPA + SOLID Backend API + SQLite DB)
 FROM node:22-alpine AS builder
 
 WORKDIR /app
@@ -7,24 +7,32 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# Copy full source tree
+# Copy full source tree (excluding .env and data/ via .dockerignore)
 COPY . .
 
-# Build production bundle
+# Build frontend bundle (dist/) and backend server bundle (dist-server/)
 RUN npm run build
 
-# Runner stage using minimal Nginx Alpine
-FROM nginx:alpine AS runner
+# Runner stage using Node 22 Alpine (includes native node:sqlite & node:crypto)
+FROM node:22-alpine AS runner
 
-# Copy custom Nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+WORKDIR /app
 
-# Copy build artifacts to Nginx web root
-COPY --from=builder /app/dist /usr/share/nginx/html
+ENV NODE_ENV=production
+ENV PORT=80
+ENV DB_PATH=/app/data/bnb_estudos.sqlite
+ENV SEED_FILE_PATH=/app/data/initial-workspace.seed.json
+
+# Copy compiled frontend and backend artifacts + relational schema
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/dist-server ./dist-server
+COPY --from=builder /app/server/database/schema.sql ./server/database/schema.sql
+
+RUN mkdir -p /app/data
 
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1/api/health || exit 1
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "dist-server/index.js"]

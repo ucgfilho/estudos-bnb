@@ -1,0 +1,28 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createAppContainer, type AppContainer } from '../server/container';
+import { handleApiRequest } from '../server/app';
+
+let container: AppContainer | null = null;
+
+function getContainer(): AppContainer {
+  if (!container) {
+    const isVercel = Boolean(process.env.VERCEL);
+    const dbPath = process.env.DB_PATH || (isVercel ? '/tmp/bnb_estudos.sqlite' : undefined);
+    container = createAppContainer(dbPath ? { dbPath } : {});
+  }
+  return container;
+}
+
+export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // Garantir que a URL preserve o prefixo /api para o roteador interno
+  if (req.url && !req.url.startsWith('/api')) {
+    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
+  }
+
+  const handled = await handleApiRequest(getContainer(), req, res);
+  if (!handled) {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.end(JSON.stringify({ error: 'Endpoint não encontrado.', code: 'NOT_FOUND' }));
+  }
+}

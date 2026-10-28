@@ -46,10 +46,14 @@ export function getServerEnv(): ServerEnv {
   const jwtSecret =
     rawSecret && rawSecret.length >= 16 ? rawSecret : runtimeFallbackSecret;
 
+  const defaultDbPath = process.env.VERCEL
+    ? '/tmp/bnb_estudos.sqlite'
+    : resolve(process.cwd(), 'data', 'bnb_estudos.sqlite');
+
   return {
     port: Number(process.env.PORT ?? 3000),
     nodeEnv: process.env.NODE_ENV ?? 'development',
-    dbPath: process.env.DB_PATH ?? resolve(process.cwd(), 'data', 'bnb_estudos.sqlite'),
+    dbPath: process.env.DB_PATH ?? defaultDbPath,
     seedFilePath:
       process.env.SEED_FILE_PATH ??
       resolve(process.cwd(), 'data', 'initial-workspace.seed.json'),

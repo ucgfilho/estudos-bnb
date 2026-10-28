@@ -1,5 +1,6 @@
 import { db } from '../db/db';
 import type { StudySession, WeeklyPlan } from '../db/types';
+import { DEFAULT_TOPICS } from '../db/seed';
 import {
   blockToSession,
   distributeWeek,
@@ -23,7 +24,8 @@ function isReplaceable(s: StudySession): boolean {
 }
 
 /**
- * Gera o cronograma de 24 semanas EXCLUSIVAMENTE por Inteligência Artificial (motor especialista BNB ou Gemini):
+ * Gera o cronograma de 24 semanas EXCLUSIVAMENTE por Inteligência Artificial (motor especialista BNB ou Gemini),
+ * baseando-se rigorosamente no Edital Verticalizado BNB 2022 (Perfil 1: Desenvolvimento de Sistemas):
  * - Aplica o peso real da prova do BNB com forte enfoque em Conhecimentos Específicos de TI.
  * - Limita os dias de estudo rigorosamente a 2 horas (120 minutos).
  * - Aos sábados: exclusivamente de resolução de questões ou simulados.
@@ -39,7 +41,14 @@ export async function generateSchedule(
   const startDate = startDateInput;
   const settings = await getSettings();
   const disciplines = await db.disciplines.toArray();
-  const topics = await db.topics.toArray();
+  let topics = await db.topics.toArray();
+
+  // Caso os tópicos do Edital Verticalizado BNB 2022 ainda não estejam cadastrados no banco,
+  // semeia automaticamente para que todas as sessões geradas fiquem vinculadas aos tópicos oficiais.
+  if (topics.length === 0) {
+    await db.topics.bulkAdd(DEFAULT_TOPICS);
+    topics = await db.topics.toArray();
+  }
 
   const aiResult = await generateAiSchedulePlan({
     startDate,

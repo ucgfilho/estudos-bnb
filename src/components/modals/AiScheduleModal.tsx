@@ -27,11 +27,11 @@ interface AiScheduleModalProps {
 }
 
 const GENERATION_STEPS = [
-  'Invocando Inteligência Artificial especializada no edital BNB...',
-  'Analisando peso dos Conhecimentos Específicos de TI (Arquitetura, Engenharia, Linguagens, Banco de Dados, Lógica e Nuvem)...',
+  'Carregando Edital Verticalizado BNB 2022 (Especialista Técnico — Analista de Sistemas — Perfil 1: Desenvolvimento de Sistemas)...',
+  'Mapeando 100% dos 148 tópicos oficiais de Conhecimentos Gerais e Conhecimentos Específicos de TI...',
   'Distribuindo carga diária rigorosa de 2 horas (120 minutos) sem sobrecarga...',
-  'Estruturando sábados exclusivos para resolução de questões e simulados Cebraspe...',
-  'Organizando progressão pedagógica em 4 fases ao longo das 24 semanas...',
+  'Estruturando sábados exclusivos para questões e simulados sobre os tópicos do edital estudados na semana...',
+  'Organizando progressão pedagógica fiel ao PDF do Edital Verticalizado ao longo das 24 semanas...',
   'Finalizando persistência do cronograma inteligente...',
 ];
 
@@ -142,15 +142,15 @@ export function AiScheduleModal({
         <div className="rounded-xl border border-primary/30 bg-primary-soft/15 p-4 text-xs space-y-2">
           <div className="flex items-center gap-2 font-semibold text-primary text-sm">
             <BrainCircuit className="size-4.5 shrink-0" />
-            <span>Geração Exclusiva por Inteligência Artificial — Cargo: Analista de Sistemas BNB</span>
+            <span>Geração Exclusiva por Inteligência Artificial — Edital Verticalizado BNB 2022 (Perfil 1)</span>
           </div>
           <p className="text-fg-muted leading-relaxed">
-            A IA gera seu planejamento de 24 semanas adaptado especificamente às características da banca Cebraspe para o <strong>Banco do Nordeste do Brasil</strong>:
+            A IA gera seu planejamento de 24 semanas seguindo <strong>rigorosamente 100% dos tópicos do PDF do Edital Verticalizado BNB 2022</strong> (Especialista Técnico — Analista de Sistemas — Perfil 1: Desenvolvimento de Sistemas, itens 14.2.1.1 e 14.2.2), sem fugir do edital:
           </p>
           <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-fg font-medium pt-1">
             <li className="flex items-start gap-1.5">
               <CheckCircle2 className="size-3.5 text-primary shrink-0 mt-0.5" />
-              <span><strong>Foco em TI (Maior Peso):</strong> Carga dominante em Arquitetura, Engenharia, Linguagens, Banco de Dados, Lógica e Nuvem (~80% dos dias úteis).</span>
+              <span><strong>Foco em TI (Maior Peso):</strong> Cobertura integral de Lógica de Programação, Arquitetura, Engenharia, Linguagens, Bancos de Dados e Nuvem (80% dos dias úteis) + Português e Raciocínio Lógico (20%).</span>
             </li>
             <li className="flex items-start gap-1.5">
               <CheckCircle2 className="size-3.5 text-primary shrink-0 mt-0.5" />
@@ -158,7 +158,7 @@ export function AiScheduleModal({
             </li>
             <li className="flex items-start gap-1.5">
               <CheckCircle2 className="size-3.5 text-primary shrink-0 mt-0.5" />
-              <span><strong>Sábados Exclusivos:</strong> Resolução de questões comentadas e simulados da banca Cebraspe (120 min).</span>
+              <span><strong>Sábados Exclusivos:</strong> Resolução de questões e simulados sobre os exatos tópicos do edital estudados na semana (120 min).</span>
             </li>
             <li className="flex items-start gap-1.5">
               <CheckCircle2 className="size-3.5 text-primary shrink-0 mt-0.5" />
@@ -256,11 +256,11 @@ export function AiScheduleModal({
 
             <Field
               label="Preferências ou Orientações Extras para a IA (Opcional)"
-              hint="Ex: Focar mais em Spring Boot e Microsserviços, reforçar Banco de Dados nas semanas finais, etc."
+              hint="Ex: Focar mais em Spring Boot e Microsserviço, reforçar Governança de dados (DAMA-DMBoK) nas semanas finais, etc."
             >
               <Textarea
                 rows={2}
-                placeholder="Ex: Gostaria de ter mais atenção em Arquitetura Hexagonal e Cloud AWS nas semanas 10 a 16..."
+                placeholder="Ex: Gostaria de dar mais atenção em Análise por pontos de função (IFPUG e NESMA) e Noções de administração de SGBD (IBM DB2, MS SQL Server e PostgreSQL)..."
                 value={customInstructions}
                 onChange={(e) => setCustomInstructions(e.target.value)}
               />

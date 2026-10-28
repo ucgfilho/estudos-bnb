@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createAppContainer, type AppContainer } from '../server/container';
-import { handleApiRequest } from '../server/app';
+import { createAppContainer, type AppContainer } from './container';
+import { handleApiRequest } from './app';
 
 let container: AppContainer | null = null;
 
@@ -14,7 +14,6 @@ function getContainer(): AppContainer {
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // Garantir que a URL preserve o prefixo /api para o roteador interno
   if (req.url && !req.url.startsWith('/api')) {
     req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
   }

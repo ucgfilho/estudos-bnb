@@ -1,8 +1,11 @@
 import { addDays, startOfWeek, weekdayIndex } from '../lib/dates';
 import {
   fetchUserWorkspaceFromApi,
+  getAuthSession,
   getAuthToken,
+  replaceUserWorkspaceInApi,
   syncBatchMutationsToApi,
+  TEST_BYPASS_TOKEN,
   type RemoteTableMutation,
 } from '../services/auth';
 import { DEFAULT_DISCIPLINES, DEFAULT_SETTINGS } from './seed';
@@ -272,6 +275,7 @@ export class AppDatabase {
       if (this.txDepth > 0) {
         this.pendingMutations.push(mutation);
       } else {
+        this.persistLocalWorkspaceCache();
         this.notifyListeners();
         void syncBatchMutationsToApi([mutation]);
       }
@@ -319,6 +323,40 @@ export class AppDatabase {
     }
   }
 
+  public exportWorkspaceSnapshot(): Record<DataTableName, unknown[]> {
+    const out = {} as Record<DataTableName, unknown[]>;
+    for (const tableName of DATA_TABLES) {
+      out[tableName] = this.table(tableName).toArraySync();
+    }
+    return out;
+  }
+
+  public persistLocalWorkspaceCache(): void {
+    const token = getAuthToken();
+    const session = getAuthSession();
+    if (
+      !token ||
+      token === TEST_BYPASS_TOKEN ||
+      !session?.user?.email ||
+      typeof window === 'undefined' ||
+      !window.localStorage
+    ) {
+      return;
+    }
+    try {
+      const key = `bnb_workspace_cache_v1:${session.user.email.toLowerCase()}`;
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({
+          savedAt: Date.now(),
+          data: this.exportWorkspaceSnapshot(),
+        }),
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+
   public hydrateFromWorkspace(workspace: Partial<Record<DataTableName, unknown[]>>): void {
     for (const tableName of DATA_TABLES) {
       const rows = workspace[tableName];
@@ -328,6 +366,7 @@ export class AppDatabase {
         this.table(tableName).clearSilent();
       }
     }
+    this.persistLocalWorkspaceCache();
     this.versionCounter++;
     this.notifyListeners();
   }
@@ -378,6 +417,7 @@ export class AppDatabase {
       if (this.txDepth === 0 && this.pendingMutations.length > 0) {
         const batch = this.pendingMutations;
         this.pendingMutations = [];
+        this.persistLocalWorkspaceCache();
         this.notifyListeners();
         void syncBatchMutationsToApi(batch);
       }
@@ -399,18 +439,86 @@ export function createDatabase(): AppDatabase {
 
 export const db = createDatabase();
 
+function loadLocalWorkspaceCache(): Record<DataTableName, unknown[]> | null {
+  const token = getAuthToken();
+  const session = getAuthSession();
+  if (
+    !token ||
+    token === TEST_BYPASS_TOKEN ||
+    !session?.user?.email ||
+    typeof window === 'undefined' ||
+    !window.localStorage
+  ) {
+    return null;
+  }
+  try {
+    const key = `bnb_workspace_cache_v1:${session.user.email.toLowerCase()}`;
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { data?: Record<DataTableName, unknown[]> };
+    return parsed?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function shouldRecoverFromLocalCache(
+  remote: Record<DataTableName, unknown[]>,
+  local: Record<DataTableName, unknown[]>,
+): boolean {
+  const remoteEmpty =
+    (remote.topics?.length ?? 0) === 0 &&
+    (remote.sessions?.length ?? 0) === 0 &&
+    (remote.weeklyPlans?.length ?? 0) === 0;
+  const localHasData =
+    (local.topics?.length ?? 0) > 0 ||
+    (local.sessions?.length ?? 0) > 0 ||
+    (local.weeklyPlans?.length ?? 0) > 0 ||
+    (local.timer?.length ?? 0) > 0;
+  if (remoteEmpty && localHasData) return true;
+
+  if ((remote.timer?.length ?? 0) === 0 && (local.timer?.length ?? 0) > 0) {
+    return true;
+  }
+  return false;
+}
+
+let inFlightEnsureSeed: Promise<void> | null = null;
+
 /**
  * Sincroniza o estado em memória com o banco de dados do usuário autenticado (quando houver token)
  * e garante que as oito disciplinas e as configurações existam.
  */
 export async function ensureSeed(database: AppDatabase = db): Promise<void> {
+  if (database === db) {
+    if (inFlightEnsureSeed) return inFlightEnsureSeed;
+    inFlightEnsureSeed = runEnsureSeed(database).finally(() => {
+      inFlightEnsureSeed = null;
+    });
+    return inFlightEnsureSeed;
+  }
+  return runEnsureSeed(database);
+}
+
+async function runEnsureSeed(database: AppDatabase): Promise<void> {
   if (database === db && getAuthToken()) {
+    const localCache = loadLocalWorkspaceCache();
     try {
       const remoteWorkspace = await fetchUserWorkspaceFromApi();
       if (remoteWorkspace) {
-        database.hydrateFromWorkspace(remoteWorkspace);
+        if (localCache && shouldRecoverFromLocalCache(remoteWorkspace, localCache)) {
+          database.hydrateFromWorkspace(localCache);
+          void replaceUserWorkspaceInApi(localCache);
+        } else {
+          database.hydrateFromWorkspace(remoteWorkspace);
+        }
+      } else if (localCache) {
+        database.hydrateFromWorkspace(localCache);
       }
     } catch (err) {
+      if (localCache) {
+        database.hydrateFromWorkspace(localCache);
+      }
       console.error('Erro ao carregar dados do servidor:', err);
     }
   }

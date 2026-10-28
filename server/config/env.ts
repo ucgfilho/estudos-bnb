@@ -1,8 +1,16 @@
-import { randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const runtimeFallbackSecret = randomBytes(48).toString('hex');
+function deriveDeterministicFallbackSecret(): string {
+  const seed = [
+    'bnb-estudos-jwt-hs256-fallback-v1',
+    process.env.DEFAULT_USER_EMAIL ?? '',
+    process.env.VERCEL_PROJECT_ID ?? '',
+    process.env.VERCEL_GIT_REPO_SLUG ?? 'estudos-bnb',
+  ].join(':');
+  return createHash('sha256').update(seed).digest('hex');
+}
 
 function loadDotEnvIfNeeded(): void {
   try {
@@ -44,7 +52,7 @@ export function getServerEnv(): ServerEnv {
 
   const rawSecret = process.env.JWT_SECRET?.trim();
   const jwtSecret =
-    rawSecret && rawSecret.length >= 16 ? rawSecret : runtimeFallbackSecret;
+    rawSecret && rawSecret.length >= 16 ? rawSecret : deriveDeterministicFallbackSecret();
 
   const defaultDbPath = process.env.VERCEL
     ? '/tmp/bnb_estudos.sqlite'

@@ -52,9 +52,8 @@ export function App() {
     return (
       <ToastProvider>
         <AuthScreen
-          onAuthenticated={async (nextSession) => {
+          onAuthenticated={(nextSession) => {
             setSession(nextSession);
-            await ensureSeed();
           }}
         />
       </ToastProvider>

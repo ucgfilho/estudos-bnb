@@ -175,6 +175,22 @@ export async function fetchUserWorkspaceFromApi(): Promise<Record<DataTableName,
   return body.data;
 }
 
+export async function replaceUserWorkspaceInApi(
+  workspace: Record<DataTableName, unknown[]>,
+): Promise<void> {
+  const token = getAuthToken();
+  if (!token || token === TEST_BYPASS_TOKEN) return;
+  try {
+    await fetch('/api/study-data/workspace', {
+      method: 'PUT',
+      headers: buildBearerHeaders(),
+      body: JSON.stringify(workspace),
+    });
+  } catch (err) {
+    console.error('Falha ao restaurar workspace no servidor:', err);
+  }
+}
+
 export async function syncBatchMutationsToApi(operations: readonly RemoteTableMutation[]): Promise<void> {
   const token = getAuthToken();
   if (!token || token === TEST_BYPASS_TOKEN || operations.length === 0) return;
@@ -185,7 +201,13 @@ export async function syncBatchMutationsToApi(operations: readonly RemoteTableMu
       body: JSON.stringify({ operations }),
     });
     if (res.status === 401) {
-      setAuthSession(null);
+      const meRes = await fetch('/api/auth/me', {
+        method: 'GET',
+        headers: buildBearerHeaders(),
+      }).catch(() => null);
+      if (meRes && meRes.status === 401) {
+        setAuthSession(null);
+      }
     }
   } catch (err) {
     console.error('Falha ao sincronizar alterações com o banco de dados:', err);

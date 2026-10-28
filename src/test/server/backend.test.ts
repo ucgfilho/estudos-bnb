@@ -186,4 +186,59 @@ describe('Backend SOLID Architecture, DTOs, JWT Bearer & LGPD Compliance', () =>
       }),
     ).rejects.toThrow(UnauthorizedError);
   });
+
+  it('preserves session across serverless cold starts when starting or pausing a timer', async () => {
+    const loginRes = await container.authController.login({
+      email: TEST_USER.email,
+      password: TEST_USER.password,
+    });
+
+    // Simulate a second serverless instance cold-starting with a fresh ephemeral SQLite DB
+    const secondInstance = createAppContainer({
+      dbPath: ':memory:',
+      seedFilePath: '__non_existent_seed__.json',
+      jwtSecret: 'test-secret-key-for-jwt-signing-and-aes256gcm-2026',
+      defaultUserEmail: TEST_USER.email,
+      defaultUserPassword: TEST_USER.password,
+      defaultUserName: TEST_USER.name,
+    });
+    await secondInstance.seedReady;
+
+    try {
+      const authUser = secondInstance.authGuard.authenticate({
+        authorization: `Bearer ${loginRes.data.token}`,
+      });
+      expect(authUser.id).toBe(loginRes.data.user.id);
+
+      const batchRes = secondInstance.studyDataController.executeBatch(authUser, {
+        operations: [
+          {
+            table: 'timer',
+            action: 'upsert',
+            records: [
+              {
+                id: 'active',
+                sessionId: null,
+                status: 'running',
+                startedAt: 1793200000000,
+                firstStartedAt: 1793200000000,
+                accumulatedSeconds: 0,
+                plannedSeconds: 3600,
+                disciplineId: 'portugues',
+                topicId: null,
+                objective: 'Sessão de teste',
+                notes: '',
+                updatedAt: 1793200000000,
+              },
+            ],
+          },
+        ],
+      });
+      expect(batchRes.status).toBe(200);
+      expect(batchRes.data.data.timer).toHaveLength(1);
+      expect(batchRes.data.data.timer[0].status).toBe('running');
+    } finally {
+      secondInstance.dbClient.close();
+    }
+  });
 });

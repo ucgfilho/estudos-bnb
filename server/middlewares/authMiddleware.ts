@@ -16,10 +16,16 @@ export interface AuthenticatedUser {
 export class BearerAuthGuard {
   private readonly tokenService: ITokenService;
   private readonly userRepository: IUserRepository;
+  private readonly allowStatelessRecovery: boolean;
 
-  constructor(tokenService: ITokenService, userRepository: IUserRepository) {
+  constructor(
+    tokenService: ITokenService,
+    userRepository: IUserRepository,
+    allowStatelessRecovery = Boolean(process.env.VERCEL),
+  ) {
     this.tokenService = tokenService;
     this.userRepository = userRepository;
+    this.allowStatelessRecovery = allowStatelessRecovery;
   }
 
   public authenticate(headers: IncomingHttpHeaders): AuthenticatedUser {
@@ -35,7 +41,22 @@ export class BearerAuthGuard {
     }
 
     const payload: TokenPayloadDto = this.tokenService.verifyToken(match[1].trim());
-    const user = this.userRepository.findById(payload.sub);
+    let user =
+      this.userRepository.findById(payload.sub) ??
+      this.userRepository.findByEmail(payload.email);
+
+    if (!user && this.allowStatelessRecovery) {
+      const now = new Date().toISOString();
+      user = this.userRepository.create({
+        id: payload.sub,
+        name: payload.name || payload.email.split('@')[0] || 'Titular da Conta',
+        email: payload.email,
+        passwordHash: 'stateless-jwt-recovered',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
     if (!user) {
       throw new UnauthorizedError('Usuário associado ao token não existe mais.');
     }

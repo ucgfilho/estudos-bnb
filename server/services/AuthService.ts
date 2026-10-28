@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { deterministicUserIdFromEmail } from '../database/seedFirefoxData';
 import {
   parseLoginDto,
   parseRegisterDto,
@@ -56,7 +56,7 @@ export class AuthService implements IAuthService {
     const passwordHash = await this.passwordHasher.hash(dto.password);
     const now = new Date().toISOString();
     const user = this.userRepository.create({
-      id: randomUUID(),
+      id: deterministicUserIdFromEmail(dto.email),
       name: dto.name,
       email: dto.email,
       passwordHash,

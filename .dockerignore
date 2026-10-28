@@ -13,4 +13,5 @@ tasks
 .git
 .gitignore
 .agents
+graphify-out
 README.md

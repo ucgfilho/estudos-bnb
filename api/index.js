@@ -1,9 +1,17 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 //#region server/config/env.ts
-var runtimeFallbackSecret = randomBytes(48).toString("hex");
+function deriveDeterministicFallbackSecret() {
+	const seed = [
+		"bnb-estudos-jwt-hs256-fallback-v1",
+		process.env.DEFAULT_USER_EMAIL ?? "",
+		process.env.VERCEL_PROJECT_ID ?? "",
+		process.env.VERCEL_GIT_REPO_SLUG ?? "estudos-bnb"
+	].join(":");
+	return createHash("sha256").update(seed).digest("hex");
+}
 function loadDotEnvIfNeeded() {
 	try {
 		const envPath = resolve(process.cwd(), ".env");
@@ -23,7 +31,7 @@ function loadDotEnvIfNeeded() {
 function getServerEnv() {
 	loadDotEnvIfNeeded();
 	const rawSecret = process.env.JWT_SECRET?.trim();
-	const jwtSecret = rawSecret && rawSecret.length >= 16 ? rawSecret : runtimeFallbackSecret;
+	const jwtSecret = rawSecret && rawSecret.length >= 16 ? rawSecret : deriveDeterministicFallbackSecret();
 	const defaultDbPath = process.env.VERCEL ? "/tmp/bnb_estudos.sqlite" : resolve(process.cwd(), "data", "bnb_estudos.sqlite");
 	return {
 		port: Number(process.env.PORT ?? 3e3),
@@ -6062,6 +6070,17 @@ function parseSingleTableMutationDto(raw) {
 }
 //#endregion
 //#region server/database/seedFirefoxData.ts
+function deterministicUserIdFromEmail(email) {
+	const normalized = email.trim().toLowerCase();
+	const hex = createHash("sha256").update(`bnb-estudos-user-id:${normalized}`).digest("hex");
+	return [
+		hex.slice(0, 8),
+		hex.slice(8, 12),
+		`4${hex.slice(13, 16)}`,
+		`a${hex.slice(17, 20)}`,
+		hex.slice(20, 32)
+	].join("-");
+}
 function resolveDefaultSeedPath() {
 	return resolve(process.cwd(), "data", "initial-workspace.seed.json");
 }
@@ -6096,7 +6115,7 @@ async function ensureDefaultUserAndFirefoxData(options) {
 	if (!user) {
 		const passwordHash = await passwordHasher.hash(password);
 		user = userRepository.create({
-			id: randomUUID(),
+			id: deterministicUserIdFromEmail(email),
 			name,
 			email,
 			passwordHash,
@@ -6399,9 +6418,11 @@ var SqliteDatabaseClient = class {
 var BearerAuthGuard = class {
 	tokenService;
 	userRepository;
-	constructor(tokenService, userRepository) {
+	allowStatelessRecovery;
+	constructor(tokenService, userRepository, allowStatelessRecovery = Boolean(process.env.VERCEL)) {
 		this.tokenService = tokenService;
 		this.userRepository = userRepository;
+		this.allowStatelessRecovery = allowStatelessRecovery;
 	}
 	authenticate(headers) {
 		const authHeader = headers.authorization ?? headers.Authorization;
@@ -6410,7 +6431,18 @@ var BearerAuthGuard = class {
 		const match = /^Bearer\s+(.+)$/i.exec(rawHeader.trim());
 		if (!match || !match[1]) throw new UnauthorizedError("Formato de autenticação inválido. Utilize \"Bearer <token>\".");
 		const payload = this.tokenService.verifyToken(match[1].trim());
-		const user = this.userRepository.findById(payload.sub);
+		let user = this.userRepository.findById(payload.sub) ?? this.userRepository.findByEmail(payload.email);
+		if (!user && this.allowStatelessRecovery) {
+			const now = (/* @__PURE__ */ new Date()).toISOString();
+			user = this.userRepository.create({
+				id: payload.sub,
+				name: payload.name || payload.email.split("@")[0] || "Titular da Conta",
+				email: payload.email,
+				passwordHash: "stateless-jwt-recovered",
+				createdAt: now,
+				updatedAt: now
+			});
+		}
 		if (!user) throw new UnauthorizedError("Usuário associado ao token não existe mais.");
 		return {
 			id: user.id,
@@ -7510,7 +7542,7 @@ var AuthService = class {
 		const passwordHash = await this.passwordHasher.hash(dto.password);
 		const now = (/* @__PURE__ */ new Date()).toISOString();
 		const user = this.userRepository.create({
-			id: randomUUID(),
+			id: deterministicUserIdFromEmail(dto.email),
 			name: dto.name,
 			email: dto.email,
 			passwordHash,

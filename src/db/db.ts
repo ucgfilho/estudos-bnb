@@ -3,6 +3,7 @@ import {
   fetchUserWorkspaceFromApi,
   getAuthSession,
   getAuthToken,
+  hasUnsyncedChanges,
   replaceUserWorkspaceInApi,
   syncBatchMutationsToApi,
   TEST_BYPASS_TOKEN,
@@ -506,7 +507,14 @@ async function runEnsureSeed(database: AppDatabase): Promise<void> {
     try {
       const remoteWorkspace = await fetchUserWorkspaceFromApi();
       if (remoteWorkspace) {
-        if (localCache && shouldRecoverFromLocalCache(remoteWorkspace, localCache)) {
+        if (localCache && hasUnsyncedChanges()) {
+          // Alterações locais não chegaram ao servidor: reenvia antes de descartá-las.
+          if (await replaceUserWorkspaceInApi(localCache)) {
+            database.hydrateFromWorkspace(localCache);
+          } else {
+            database.hydrateFromWorkspace(remoteWorkspace);
+          }
+        } else if (localCache && shouldRecoverFromLocalCache(remoteWorkspace, localCache)) {
           database.hydrateFromWorkspace(localCache);
           void replaceUserWorkspaceInApi(localCache);
         } else {

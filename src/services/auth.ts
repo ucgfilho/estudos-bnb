@@ -175,19 +175,43 @@ export async function fetchUserWorkspaceFromApi(): Promise<Record<DataTableName,
   return body.data;
 }
 
+const UNSYNCED_KEY = 'bnb_unsynced_changes_v1';
+
+/** Indica que alguma alteração local não chegou ao servidor (ex.: lote rejeitado). */
+export function hasUnsyncedChanges(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.localStorage?.getItem(UNSYNCED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setUnsyncedChanges(value: boolean): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    if (value) window.localStorage.setItem(UNSYNCED_KEY, '1');
+    else window.localStorage.removeItem(UNSYNCED_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export async function replaceUserWorkspaceInApi(
   workspace: Record<DataTableName, unknown[]>,
-): Promise<void> {
+): Promise<boolean> {
   const token = getAuthToken();
-  if (!token || token === TEST_BYPASS_TOKEN) return;
+  if (!token || token === TEST_BYPASS_TOKEN) return false;
   try {
-    await fetch('/api/study-data/workspace', {
+    const res = await fetch('/api/study-data/workspace', {
       method: 'PUT',
       headers: buildBearerHeaders(),
       body: JSON.stringify(workspace),
     });
+    if (res.ok) setUnsyncedChanges(false);
+    return res.ok;
   } catch (err) {
     console.error('Falha ao restaurar workspace no servidor:', err);
+    return false;
   }
 }
 
@@ -200,6 +224,10 @@ export async function syncBatchMutationsToApi(operations: readonly RemoteTableMu
       headers: buildBearerHeaders(),
       body: JSON.stringify({ operations }),
     });
+    if (!res.ok && res.status !== 401) {
+      setUnsyncedChanges(true);
+      console.error('Servidor rejeitou alterações; serão reenviadas ao recarregar.', res.status);
+    }
     if (res.status === 401) {
       const meRes = await fetch('/api/auth/me', {
         method: 'GET',
@@ -210,6 +238,7 @@ export async function syncBatchMutationsToApi(operations: readonly RemoteTableMu
       }
     }
   } catch (err) {
+    setUnsyncedChanges(true);
     console.error('Falha ao sincronizar alterações com o banco de dados:', err);
   }
 }

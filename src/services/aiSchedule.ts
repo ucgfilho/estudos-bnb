@@ -3045,6 +3045,12 @@ async function requestGeminiWeeks(
   throw new Error(`Falha ao gerar cronograma com o Gemini: ${lastError}`);
 }
 
+/** O Gemini às vezes devolve listas no lugar de texto; o servidor exige string. */
+function asText(value: unknown): string {
+  if (Array.isArray(value)) return value.map((v) => String(v)).join(' ');
+  return typeof value === 'string' ? value : '';
+}
+
 /**
  * Chamada à API Google Gemini para gerar o cronograma de 24 semanas rigorosamente vinculado
  * ao Edital Verticalizado BNB 2022 (Perfil 1: Desenvolvimento de Sistemas).
@@ -3246,8 +3252,8 @@ Responda apenas com o JSON {"weeks":[...]} contendo ${to - from + 1} semanas.${e
       id: createId(),
       weekIndex: i + 1,
       weekStart,
-      objectives: weekData.objectives || fallbackWeek.objectives,
-      plannedContent: weekData.plannedContent || plannedContentFromTopics,
+      objectives: asText(weekData.objectives) || fallbackWeek.objectives,
+      plannedContent: asText(weekData.plannedContent) || plannedContentFromTopics,
       plannedMinutes: totalWeeklyMinutes || 720,
       status: 'pendente',
       notes:
